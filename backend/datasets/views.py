@@ -1,41 +1,38 @@
-from rest_framework import viewsets, status
-from rest_framework.response import Response
+from rest_framework import viewsets
 from rest_framework.permissions import IsAuthenticated
 from .models import Dataset
 from .serializers import DatasetSerializer
 import pandas as pd
 
-class UploadViewSet(viewsets.ViewSet):
+class UploadViewSet(viewsets.ModelViewSet):
+    queryset = Dataset.objects.all()
+    serializer_class = DatasetSerializer
     permission_classes = [IsAuthenticated]
 
-    def create(self, request):
-        # Use a different serializer for upload that doesn't require the file to be saved first
-        serializer = DatasetSerializer(data=request.data, context={'request': request})
-        if serializer.is_valid():
-            dataset = serializer.save(user=request.user)
-            try:
-                file = dataset.file
-                file_extension = file.name.split('.')[-1].lower()
-                if file_extension == 'csv':
-                    df = pd.read_csv(file)
-                elif file_extension in ['xlsx', 'xls']:
-                    df = pd.read_excel(file)
-                elif file_extension == 'json':
-                    df = pd.read_json(file)
-                else:
-                    return Response({'error': 'Unsupported file type'}, status=status.HTTP_400_BAD_REQUEST)
+    def perform_create(self, serializer):
+        dataset = serializer.save(user=self.request.user)
+        try:
+            file = dataset.file
+            file_extension = file.name.split('.')[-1].lower()
+            if file_extension == 'csv':
+                df = pd.read_csv(file)
+            elif file_extension in ['xlsx', 'xls']:
+                df = pd.read_excel(file)
+            elif file_extension == 'json':
+                df = pd.read_json(file)
+            else:
+                # This part will not be reached because the serializer will raise a validation error
+                # but as a fallback, we handle it
+                raise Exception("Unsupported file type")
 
-                preview = df.head(5).iloc[:, :5]
-                dataset.metadata['preview'] = preview.to_dict()
-                dataset.save()
+            preview = df.head(5).iloc[:, :5]
+            dataset.metadata['preview'] = preview.to_dict()
+            dataset.save()
+        except Exception as e:
+            # If parsing fails, delete the dataset record and file
+            dataset.delete()
+            # Re-raise the exception to be caught by the default exception handler
+            raise e
 
-                # Return a different serializer for the response
-                response_serializer = DatasetSerializer(dataset)
-                return Response(response_serializer.data, status=status.HTTP_201_CREATED)
-
-            except Exception as e:
-                # If parsing fails, delete the dataset record and file
-                dataset.delete()
-                return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    def get_queryset(self):
+        return Dataset.objects.filter(user=self.request.user)

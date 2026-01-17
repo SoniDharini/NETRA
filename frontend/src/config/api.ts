@@ -28,7 +28,7 @@ export const API_ENDPOINTS = {
   REFRESH_TOKEN: '/auth/login/refresh/',
 
   // Data Upload
-  UPLOAD_DATA: '/datasets/upload/',
+  UPLOAD_DATA: '/datasets/uploads/',
   VALIDATE_DATA: '/data/validate',
   GET_DATA_PREVIEW: '/data/preview',
   
