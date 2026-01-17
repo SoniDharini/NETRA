@@ -41,10 +41,11 @@ Make sure the following are installed on your system:
 
 ---
 
-## 🖥️ Frontend Setup (React)
+## 🖥️ Frontend Setup (React) & 🔧 Backend Setup (Django)
 
 ### Step 1: Navigate to frontend folder
 ```bash
+#frotend
 cd frontend
 Step 2: Install dependencies
 npm install
@@ -53,7 +54,7 @@ npm run dev
 The frontend will start at:
 
 http://localhost:5173
-🔧 Backend Setup (Django)
+#backend
 Step 1: Navigate to backend folder
 cd backend
 Step 2: Create and activate virtual environment (recommended)
