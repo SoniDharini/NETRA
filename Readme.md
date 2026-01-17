@@ -45,7 +45,7 @@ Make sure the following are installed on your system:
 
 ### Step 1: Navigate to frontend folder
 ```bash
-#frotend
+#frontend
 cd frontend
 Step 2: Install dependencies
 npm install
