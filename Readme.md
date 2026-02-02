@@ -51,9 +51,11 @@ Step 2: Install dependencies
 npm install
 Step 3: Run the development server
 npm run dev
+```
 The frontend will start at:
 
 http://localhost:5173
+```
 #backend
 Step 1: Navigate to backend folder
 cd backend
@@ -73,6 +75,7 @@ python manage.py makemigrations
 python manage.py migrate
 Step 5: Run the Django development server
 python manage.py runserver
+```
 The backend API will start at:
 
 http://localhost:8000
