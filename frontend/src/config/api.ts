@@ -15,11 +15,12 @@ export const API_CONFIG = {
   // BASE_URL: 'https://your-backend-domain.com/api',
   
   // Timeout for API requests (in milliseconds)
-  TIMEOUT: 30000,
+  TIMEOUT: 300000,
   
   // Maximum file upload size (in bytes) - 50MB
   MAX_FILE_SIZE: 50 * 1024 * 1024,
 };
+
 
 export const API_ENDPOINTS = {
   // Auth
@@ -29,13 +30,18 @@ export const API_ENDPOINTS = {
 
   // Data Upload
   UPLOAD_DATA: '/datasets/uploads/',
-  VALIDATE_DATA: '/data/validate',
-  GET_DATA_PREVIEW: '/data/preview',
+  UPLOAD_JSON_DATA: '/datasets/upload-json/',
   
-  // Preprocessing
-  GET_PREPROCESSING_SUGGESTIONS: '/preprocessing/suggestions',
-  APPLY_PREPROCESSING: '/preprocessing/apply',
-  GET_FEATURE_ENGINEERING_SUGGESTIONS: '/preprocessing/feature-engineering',
+  // Data Preview & Profiling (operates on full dataset)
+  GET_DATA_PREVIEW: '/datasets/get-data-preview/',
+  GET_DATA_PROFILE: '/datasets/get-data-profile/',
+  GET_PROFILE_AND_SUGGESTIONS: '/datasets/',
+  
+  // Preprocessing (operates on full dataset)
+  GET_PREPROCESSING_SUGGESTIONS: '/datasets/preprocessing-suggestions/',
+  APPLY_PREPROCESSING: '/datasets/apply-preprocessing/',
+  DOWNLOAD_PREPROCESSED_DATA: '/datasets/download-preprocessed/',
+  GET_FEATURE_ENGINEERING_SUGGESTIONS: '/datasets/feature-engineering-suggestions/',
   
   // Model Training
   GET_MODEL_RECOMMENDATIONS: '/models/recommendations',
@@ -58,3 +64,4 @@ export const API_ENDPOINTS = {
   GET_PROJECT: '/projects/:id',
   LIST_PROJECTS: '/projects/list',
 };
+

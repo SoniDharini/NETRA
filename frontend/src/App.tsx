@@ -2,8 +2,8 @@ import { useState, useEffect } from 'react';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { Navigation } from './components/Navigation';
 import { Dashboard } from './components/Dashboard';
-import { DataUpload } from './components/DataUpload';
-import { Preprocessing } from './components/Preprocessing';
+import { UploadPage } from './components/UploadPage';
+import { PreprocessingPage } from './components/PreprocessingPage';
 import { ModelTraining } from './components/ModelTraining';
 import { Visualization } from './components/Visualization';
 import { ReportGeneration } from './components/ReportGeneration';
@@ -50,7 +50,23 @@ export default function App() {
       setIsAuthenticated(true);
       setAuthView(null);
     }
+
+    const savedProjectData = sessionStorage.getItem('projectData');
+    if (savedProjectData) {
+      const parsedData = JSON.parse(savedProjectData);
+      parsedData.completedSteps = new Set(parsedData.completedSteps);
+      setProjectData(parsedData);
+    }
   }, []);
+
+  useEffect(() => {
+    // Save projectData to session storage whenever it changes
+    const dataToSave = {
+      ...projectData,
+      completedSteps: Array.from(projectData.completedSteps),
+    };
+    sessionStorage.setItem('projectData', JSON.stringify(dataToSave));
+  }, [projectData]);
 
   const updateProjectData = (updates: Partial<ProjectData>) => {
     setProjectData(prev => ({ ...prev, ...updates }));
@@ -132,7 +148,7 @@ export default function App() {
             {currentSection === 'upload' && (
               <div className="h-full overflow-y-auto">
                 <div className="container mx-auto px-4 py-6">
-                  <DataUpload 
+                  <UploadPage 
                     onNavigate={setCurrentSection}
                     updateProjectData={updateProjectData}
                     markStepComplete={markStepComplete}
@@ -143,7 +159,7 @@ export default function App() {
             {currentSection === 'preprocessing' && (
               <div className="h-full overflow-y-auto">
                 <div className="container mx-auto px-4 py-6">
-                  <Preprocessing 
+                  <PreprocessingPage 
                     onNavigate={setCurrentSection}
                     projectData={projectData}
                     updateProjectData={updateProjectData}
