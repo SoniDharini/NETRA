@@ -18,6 +18,9 @@ import warnings
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler, LabelEncoder
 from sklearn.impute import SimpleImputer, KNNImputer
 from sklearn.ensemble import IsolationForest
+from sklearn.cluster import KMeans
+from sklearn.neighbors import LocalOutlierFactor
+from sklearn.impute import SimpleImputer, KNNImputer
 from sklearn.decomposition import PCA
 from sklearn.feature_selection import mutual_info_classif, mutual_info_regression
 from scipy import stats
@@ -32,7 +35,7 @@ try:
     )
     HAS_ENHANCED_FEATURES = True
     
-    from .ml_feature_discovery import generate_ml_driven_suggestions
+    from .ml_feature_discovery import generate_ml_driven_suggestions, perform_unsupervised_discovery
     HAS_ML_DISCOVERY = True
     
 except ImportError:
@@ -128,6 +131,17 @@ class PreprocessingService:
                         val = corr_matrix.iloc[i, j]
                         if val > 0.7:
                              profile['correlations'][f"{col1}|{col2}"] = float(val)
+                
+                # Also calculate Spearman
+                corr_matrix_spearman = df[numeric_cols].corr(method='spearman').abs()
+                for i in range(len(numeric_cols)):
+                    for j in range(i+1, len(numeric_cols)):
+                        col1 = numeric_cols[i]
+                        col2 = numeric_cols[j]
+                        val = corr_matrix_spearman.iloc[i, j]
+                        if val > 0.7:
+                              profile['correlations'][f"{col1}|{col2}_spearman"] = float(val)
+
             except Exception:
                 pass
 
@@ -448,6 +462,19 @@ class PreprocessingService:
                         'group': 'feature_selection',
                         'params': {}
                      })
+        
+        # 8. PCA Suggestion (Dimensionality Reduction)
+        if len(numeric_cols) > 5: # Heuristic
+             # Check if we have high multicollinearity or just many features
+             if len(profile.get('correlations', {})) > 5:
+                  suggestions.append({
+                      'type': 'reduce_dimensions_pca',
+                      'description': f'Apply PCA to reduce dimensionality (high correlation detected)',
+                      'recommended': False, # Recommend inspection
+                      'rationale': f'Detected high correlation between features. PCA can reduce dimensions while preserving variance.',
+                      'group': 'feature_selection',
+                      'params': {'n_components': 0.95} # 95% variance
+                  })
 
         return suggestions
 
@@ -469,6 +496,10 @@ class PreprocessingService:
             # Add model-based suggestions
             ml_suggestions = generate_ml_driven_suggestions(df, profile)
             suggestions.extend(ml_suggestions)
+            
+            # Add unsupervised discovery suggestions
+            unsupervised_suggestions = perform_unsupervised_discovery(df)
+            suggestions.extend(unsupervised_suggestions)
             
         if HAS_ENHANCED_FEATURES or HAS_ML_DISCOVERY:
              return suggestions
@@ -642,6 +673,72 @@ class PreprocessingService:
                          applied_steps.append({'type': step_type, 'description': desc_map.get(step_type, f'Applied {step_type}')})
                      else:
                         print(f"Warning: Step {step_type} requested but enhanced features module missing")
+                
+                elif step_type == 'cluster_segmentation':
+                     try:
+                         n_clusters = params.get('n_clusters', 3)
+                         cols = params.get('columns')
+                         
+                         # Use provided columns or fall back to all numeric
+                         numeric_cols = df_processed.select_dtypes(include=[np.number]).columns
+                         use_cols = [c for c in cols if c in df_processed.columns] if cols else numeric_cols
+                         
+                         if len(use_cols) > 0:
+                             # Impute for clustering
+                             X = df_processed[use_cols].fillna(df_processed[use_cols].median())
+                             # Scale
+                             scaler = StandardScaler()
+                             X_scaled = scaler.fit_transform(X)
+                             
+                             kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+                             df_processed['cluster_id'] = kmeans.fit_predict(X_scaled)
+                             engineered_features.append('cluster_id')
+                             applied_steps.append({'type': step_type, 'description': f'Created {n_clusters} clusters using KMeans'})
+                     except Exception as e:
+                         print(f"Error applying clustering: {e}")
+                
+                elif step_type == 'cluster_dbscan':
+                     try:
+                         eps = params.get('eps', 0.5)
+                         min_samples = params.get('min_samples', 5)
+                         numeric_cols = df_processed.select_dtypes(include=[np.number]).columns
+                         
+                         if len(numeric_cols) > 0:
+                             from sklearn.cluster import DBSCAN
+                             X = df_processed[numeric_cols].fillna(df_processed[numeric_cols].median())
+                             scaler = StandardScaler()
+                             X_scaled = scaler.fit_transform(X)
+                             
+                             # Use simple sampling if too large, DBSCAN is O(N^2) worst case usually
+                             if len(X) > 20000:
+                                  print("Skipping DBSCAN on large dataset for safety")
+                             else:
+                                 dbscan = DBSCAN(eps=eps, min_samples=min_samples)
+                                 clusters = dbscan.fit_predict(X_scaled)
+                                 df_processed['cluster_dbscan'] = clusters
+                                 engineered_features.append('cluster_dbscan')
+                                 applied_steps.append({'type': step_type, 'description': f'Created clusters using DBSCAN (eps={eps})'})
+                     except Exception as e:
+                         print(f"Error applying DBSCAN: {e}")
+                
+                elif step_type == 'detect_anomalies_lof':
+                     try:
+                         n_neighbors = params.get('n_neighbors', 20)
+                         numeric_cols = df_processed.select_dtypes(include=[np.number]).columns
+                         
+                         if len(numeric_cols) > 0:
+                             X = df_processed[numeric_cols].fillna(df_processed[numeric_cols].median())
+                             scaler = StandardScaler()
+                             X_scaled = scaler.fit_transform(X)
+                             
+                             lof = LocalOutlierFactor(n_neighbors=n_neighbors)
+                             # -1 is outlier, 1 is inlier. Convert to 1 (anomaly) vs 0 (normal)
+                             preds = lof.fit_predict(X_scaled)
+                             df_processed['is_anomaly_lof'] = np.where(preds == -1, 1, 0)
+                             engineered_features.append('is_anomaly_lof')
+                             applied_steps.append({'type': step_type, 'description': f'Flagged anomalies using LOF (neighbors={n_neighbors})'})
+                     except Exception as e:
+                         print(f"Error applying LOF: {e}")
 
             except Exception as e:
                 # Log error and continue

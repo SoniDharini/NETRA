@@ -10,7 +10,8 @@ from .views import (
     get_feature_engineering_suggestions,
     apply_preprocessing,
     download_preprocessed_data,
-    profile_and_suggest_features
+    profile_and_suggest_features,
+    auto_process_dataset
 )
 
 router = DefaultRouter()
@@ -25,5 +26,10 @@ urlpatterns = [
     path('feature-engineering-suggestions/', get_feature_engineering_suggestions, name='feature-engineering-suggestions'),
     path('<uuid:dataset_id>/profile-and-suggest/', profile_and_suggest_features, name='profile-and-suggest-features'),
     path('apply-preprocessing/', apply_preprocessing, name='apply-preprocessing'),
+    path('auto-process/', auto_process_dataset, name='auto-process-dataset'),
     path('download-preprocessed/', download_preprocessed_data, name='download-preprocessed'),
+    
+    # RESTful endpoints as per requirements
+    path('dataset/<uuid:dataset_id>/download/', download_preprocessed_data, name='rest-download-dataset'),
+    path('dataset/<uuid:dataset_id>/preprocess/', apply_preprocessing, name='rest-preprocess-dataset'),
 ]

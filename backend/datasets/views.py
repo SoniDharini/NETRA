@@ -8,6 +8,7 @@ from rest_framework.response import Response
 from rest_framework.decorators import api_view, permission_classes
 from django.core.files.base import ContentFile
 from django.http import HttpResponse, FileResponse
+from django.conf import settings
 from .models import Dataset
 from .serializers import DatasetSerializer
 from .preprocessing_service import preprocessing_service
@@ -295,9 +296,10 @@ def get_feature_engineering_suggestions(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
-def apply_preprocessing(request):
-    """Apply preprocessing steps to the FULL dataset"""
-    file_id = request.data.get('fileId')
+def apply_preprocessing(request, dataset_id=None):
+    """Apply preprocessing steps and save to specific path"""
+    # handle both url param and body param for legacy support if needed
+    file_id = dataset_id or request.data.get('fileId')
     steps = request.data.get('steps', [])
     
     if not file_id:
@@ -305,38 +307,43 @@ def apply_preprocessing(request):
     
     try:
         dataset = Dataset.objects.get(id=file_id, user=request.user)
-        # Load FULL dataset for preprocessing
+        # Load FULL dataset
         df = preprocessing_service.load_dataset(dataset.file.path)
         
-        # Apply preprocessing to FULL dataset
+        # Apply preprocessing
         df_processed, summary = preprocessing_service.apply_preprocessing(df, steps)
         
-        # Save processed FULL dataset
-        processed_name = f"processed_{uuid.uuid4().hex[:8]}_{dataset.name}"
-        processed_dataset = Dataset(user=request.user, name=processed_name, metadata={})
+        # Define storage path
+        user_id = str(request.user.id)
+        ds_id = str(dataset.id)
         
-        # Save the FULL processed dataset
-        csv_buffer = df_processed.to_csv(index=False)
-        processed_dataset.file.save(processed_name, ContentFile(csv_buffer.encode('utf-8')))
+        # Ensure directory exists: media/datasets/{user_id}/{dataset_id}/
+        save_dir = os.path.join(settings.MEDIA_ROOT, 'datasets', user_id, ds_id)
+        os.makedirs(save_dir, exist_ok=True)
         
-        # Create 5x5 preview for UI
+        processed_path = os.path.join(save_dir, 'processed.csv')
+        
+        # Save processed dataset
+        df_processed.to_csv(processed_path, index=False)
+        
+        # Update metadata
+        dataset.metadata.update({
+            'processed': True,
+            'processed_file_path': processed_path,
+            'last_processed_at': str(pd.Timestamp.now()),
+            'idpra_summary': summary
+        })
+        dataset.save()
+
+        # Create 5x5 preview
         preview = df_processed.head(5).iloc[:, :min(5, len(df_processed.columns))]
-        # Replace NaN/Inf with None for JSON compliance
         preview_clean = preview.astype(object).where(pd.notnull(preview), None)
         preview_clean = preview_clean.replace([float('inf'), float('-inf')], None)
-        processed_dataset.metadata = {
-            'preview': preview_clean.to_dict(orient='records'),
-            'rowCount': len(df_processed),
-            'columnCount': len(df_processed.columns),
-            'preprocessingApplied': True,
-            'originalFileId': file_id
-        }
-        processed_dataset.save()
         
         return Response({
             'success': True,
             'data': {
-                'processedFileId': processed_dataset.id,
+                'processedFileId': dataset.id, # Return same ID as we are updating in place (conceptually)
                 'summary': summary['summary'],
                 'beforeShape': summary['beforeShape'],
                 'afterShape': summary['afterShape'],
@@ -352,41 +359,49 @@ def apply_preprocessing(request):
     except Dataset.DoesNotExist:
         return Response({'error': 'Dataset not found'}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
-def download_preprocessed_data(request):
-    """Download the FULL preprocessed dataset"""
-    file_id = request.query_params.get('fileId')
-    file_format = request.query_params.get('format', 'csv')
+def download_preprocessed_data(request, dataset_id=None):
+    """Download the processed dataset from specific path"""
+    file_id = dataset_id or request.query_params.get('fileId')
     
     if not file_id:
         return Response({'error': 'fileId is required'}, status=status.HTTP_400_BAD_REQUEST)
-    
+        
     try:
+        # Check permission
         dataset = Dataset.objects.get(id=file_id, user=request.user)
-        # Load FULL dataset
-        df = preprocessing_service.load_dataset(dataset.file.path)
         
-        # Create temporary file for download
-        if file_format == 'csv':
-            response = HttpResponse(content_type='text/csv')
-            response['Content-Disposition'] = f'attachment; filename="{dataset.name}"'
-            df.to_csv(response, index=False)
-        elif file_format == 'xlsx':
-            response = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-            response['Content-Disposition'] = f'attachment; filename="{dataset.name.rsplit(".", 1)[0]}.xlsx"'
-            df.to_excel(response, index=False, engine='openpyxl')
-        else:
-            return Response({'error': 'Unsupported format'}, status=status.HTTP_400_BAD_REQUEST)
+        # Path logic
+        user_id = str(request.user.id)
+        ds_id = str(dataset.id)
+        processed_path = os.path.join(settings.MEDIA_ROOT, 'datasets', user_id, ds_id, 'processed.csv')
         
+        if not os.path.exists(processed_path):
+             # Fallback to metadata check if path differs?
+             if dataset.metadata.get('processed_file_path') and os.path.exists(dataset.metadata['processed_file_path']):
+                 processed_path = dataset.metadata['processed_file_path']
+             else:
+                 return Response({'error': 'Processed dataset not found. Please run preprocessing first.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Serve file
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = f'attachment; filename="processed_{dataset.name}.csv"'
+        
+        with open(processed_path, 'rb') as f:
+            response.write(f.read())
         return response
+
     except Dataset.DoesNotExist:
         return Response({'error': 'Dataset not found'}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 
 
@@ -442,39 +457,143 @@ def profile_and_suggest_features(request, dataset_id):
         X = df_for_model.drop(columns=[target_col])
         y = df_for_model[target_col]
 
-        if problem_type == 'classification':
-            model = lgb.LGBMClassifier(random_state=42)
-            y = pd.Series(pd.factorize(y)[0])
-        elif problem_type == 'regression':
-            model = lgb.LGBMRegressor(random_state=42)
-        else:
-            return Response(clean_for_json({'profile': profile, 'suggestions': []}))
-        
-        model.fit(X, y, categorical_feature=categorical_features)
+        try:
+             import lightgbm as lgb
+             if problem_type == 'classification':
+                model = lgb.LGBMClassifier(random_state=42)
+                y = pd.Series(pd.factorize(y)[0])
+             elif problem_type == 'regression':
+                model = lgb.LGBMRegressor(random_state=42)
+             else:
+                model = None
+             
+             if model:
+                 model.fit(X, y, categorical_feature=categorical_features)
+                 feature_importances = model.feature_importances_
+                 feature_names = X.columns
+                 importance_df = pd.DataFrame({'feature': feature_names, 'importance': feature_importances}).sort_values(by='importance', ascending=False)
+                 # Add feature importance to profile
+                 profile['featureImportance'] = importance_df.head(20).to_dict(orient='records')
+        except ImportError:
+             logging.warning("LightGBM not installed. Skipping feature importance.")
+        except Exception as e:
+             logging.error(f"LightGBM failed: {e}")
 
-        feature_importances = model.feature_importances_
-        feature_names = X.columns
-        importance_df = pd.DataFrame({'feature': feature_names, 'importance': feature_importances}).sort_values(by='importance', ascending=False)
-        
-        # Add feature importance to profile
-        profile['featureImportance'] = importance_df.head(20).to_dict(orient='records')
         
         # robustly generate suggestions
         try:
-             suggestions = preprocessing_service.generate_feature_engineering_suggestions(df, profile)
+             # Generate Feature Engineering suggestions (Enhanced + ML + Basic)
+             fe_suggestions = preprocessing_service.generate_feature_engineering_suggestions(df, profile)
         except Exception as suggestion_error:
-             logging.error(f"Error generating suggestions: {suggestion_error}")
-             suggestions = []
+             logging.error(f"Error generating FE suggestions: {suggestion_error}")
+             fe_suggestions = []
+
+        try:
+             # Generate Cleaning/Preprocessing suggestions
+             clean_suggestions = preprocessing_service.generate_preprocessing_suggestions(df, profile)
+        except Exception as clean_error:
+             logging.error(f"Error generating cleaning suggestions: {clean_error}")
+             clean_suggestions = []
+        
+        # Combine all suggestions
+        all_suggestions = clean_suggestions + fe_suggestions
 
         # Apply robust JSON cleaning before response
         return Response(clean_for_json({
             'profile': profile,
-            'suggestions': suggestions
+            'suggestions': all_suggestions
         }))
 
     except Exception as e:
         import traceback
-        traceback.print_exc()
-        logging.error(f"Unhandled error in profile_and_suggest_features for {dataset_id}: {e}")
-        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        logging.error(f"Generate suggestions failed: {str(e)}\n{traceback.format_exc()}")
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def auto_process_dataset(request):
+    """
+    IDPRA Automated Workflow:
+    1. Scan & Profile Full Dataset
+    2. Generate Recommendations (Cleaning, Encoding, Feature Engineering, Unsupervised)
+    3. Auto-Apply 'Recommended' Steps
+    4. Save & Return Result
+    """
+    dataset_id = request.data.get('dataset_id') or request.data.get('fileId')
+    
+    if not dataset_id:
+        return Response({'error': 'dataset_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+    logging.info(f"IDPRA Auto-Process called for dataset: {dataset_id}")
+    
+    try:
+        dataset = Dataset.objects.get(id=dataset_id, user=request.user)
+        
+        # 1. Load FULL Dataset
+        df = preprocessing_service.load_dataset(dataset.file.path)
+        
+        # 2. Profile
+        profile = preprocessing_service.profile_dataset(df)
+        
+        # 3. Generate Suggestions
+        clean_suggestions = preprocessing_service.generate_preprocessing_suggestions(df, profile)
+        fe_suggestions = preprocessing_service.generate_feature_engineering_suggestions(df, profile)
+        
+        all_suggestions = clean_suggestions + fe_suggestions
+        
+        # 4. Filter for Auto-Application (Only Recommended=True)
+        # We also strictly enforce "Do not delete rows blindly" -> So we might skip outlier removal unless very confident
+        # The service defaults outlier removal to Recommended=False, so this is handled.
+        
+        steps_to_apply = [s for s in all_suggestions if s.get('recommended', False)]
+        
+        # 5. Apply Steps
+        df_processed, summary = preprocessing_service.apply_preprocessing(df, steps_to_apply)
+        
+        # 6. Save Processed Dataset
+        processed_name = f"IDPRA_Processed_{dataset.name}"
+        processed_dataset = Dataset(user=request.user, name=processed_name, metadata={})
+        
+        csv_buffer = df_processed.to_csv(index=False)
+        processed_dataset.file.save(processed_name, ContentFile(csv_buffer.encode('utf-8')))
+        
+        # Create Preview
+        preview = df_processed.head(5).iloc[:, :min(5, len(df_processed.columns))]
+        preview_clean = preview.astype(object).where(pd.notnull(preview), None)
+        preview_clean = preview_clean.replace([float('inf'), float('-inf')], None)
+        
+        processed_dataset.metadata = {
+            'preview': preview_clean.to_dict(orient='records'),
+            'rowCount': len(df_processed),
+            'columnCount': len(df_processed.columns),
+            'preprocessingApplied': True,
+            'originalFileId': dataset_id,
+            'idpra_summary': summary
+        }
+        processed_dataset.save()
+        
+        return Response({
+            'success': True,
+            'data': {
+                'processedFileId': processed_dataset.id,
+                'summary': summary['summary'],
+                'beforeShape': summary['beforeShape'],
+                'afterShape': summary['afterShape'],
+                'appliedSteps': summary['appliedSteps'], # This serves as the "Explainability" log
+                'newFeatures': summary.get('engineeredFeatures', []),
+                'preview': {
+                    'columns': list(preview.columns),
+                    'rows': preview_clean.to_dict(orient='records')
+                }
+            }
+        })
+
+    except Dataset.DoesNotExist:
+        return Response({'error': 'Dataset not found'}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

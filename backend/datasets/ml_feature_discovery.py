@@ -1,10 +1,12 @@
-
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Any
 from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.impute import SimpleImputer
+from sklearn.cluster import KMeans, DBSCAN
+from sklearn.metrics import silhouette_score
+from sklearn.neighbors import LocalOutlierFactor
 
 def train_feature_discovery_model(df: pd.DataFrame, target_col: str, task: str) -> Dict[str, Any]:
     """
@@ -114,3 +116,103 @@ def generate_ml_driven_suggestions(df: pd.DataFrame, profile: Dict[str, Any]) ->
         })
         
     return suggestions
+
+def perform_unsupervised_discovery(df: pd.DataFrame) -> List[Dict[str, Any]]:
+    """
+    Perform unsupervised pattern discovery (Clustering & Anomaly Detection).
+    """
+    suggestions = []
+    
+    # Select numeric columns for clustering
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    if len(numeric_cols) < 2:
+        return []
+    
+    # Preprocess for clustering: Impute & Scale
+    try:
+        X = df[numeric_cols].copy()
+        imputer = SimpleImputer(strategy='median')
+        X_imputed = imputer.fit_transform(X)
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X_imputed)
+        
+        # Limit sample size for speed
+        if len(X_scaled) > 5000:
+             # Use sampling for discovery
+             indices = np.random.choice(len(X_scaled), 5000, replace=False)
+             X_sample = X_scaled[indices]
+        else:
+             X_sample = X_scaled
+             
+        # --- K-MEANS CLUSTERING ---
+        best_score = -1
+        best_k = 0
+        
+        # Try K from 2 to 6
+        for k in range(2, 7):
+            kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
+            labels = kmeans.fit_predict(X_sample)
+            score = silhouette_score(X_sample, labels)
+            
+            if score > best_score:
+                best_score = score
+                best_k = k
+        
+        # If we found a reasonable structure
+        if best_score > 0.4: # Silhouette threshold
+             suggestions.append({
+                'type': 'cluster_segmentation',
+                'description': f'Create K-Means Clusters (K={best_k})',
+                'recommended': True,
+                'rationale': f'Unsupervised Discovery: Found distinct groups with high silhouette score ({best_score:.2f}). Useful for segmentation.',
+                'newFeatures': ['cluster_id'],
+                'impact': 'Adds 1 categorical column (Cluster IDs)',
+                'group': 'clustering',
+                'params': {'n_clusters': best_k, 'columns': numeric_cols}
+             })
+
+        # --- DBSCAN CLUSTERING (HDBSCAN Proxy) ---
+        # DBSCAN is density based, similar intent to HDBSCAN
+        try:
+            dbscan = DBSCAN(eps=0.5, min_samples=5)
+            clusters_db = dbscan.fit_predict(X_sample)
+            n_clusters_db = len(set(clusters_db)) - (1 if -1 in clusters_db else 0)
+            
+            if n_clusters_db > 1:
+                 suggestions.append({
+                    'type': 'cluster_dbscan',
+                    'description': f'Create Density Clusters (DBSCAN/HDBSCAN)',
+                    'recommended': False, # More experimental
+                    'rationale': f'Unsupervised Discovery: Found {n_clusters_db} density-based clusters. Good for arbitrary shapes.',
+                    'newFeatures': ['cluster_dbscan'],
+                    'impact': 'Adds 1 categorical column',
+                    'group': 'clustering',
+                    'params': {'eps': 0.5, 'min_samples': 5}
+                 })
+        except Exception as db_err:
+            pass
+
+        # --- ANOMALY DETECTION (LOF) ---
+        # Local Outlier Factor
+        lof = LocalOutlierFactor(n_neighbors=20, contamination=0.05)
+        # fit_predict returns 1 for inliers, -1 for outliers
+        # We can't pickle LOF for prediction easily on new data without saving model, 
+        # but for batch processing we can apply it.
+        # Suggesting to add "is_anomaly" flag rather than dropping blindly
+        
+        suggestions.append({
+            'type': 'detect_anomalies_lof',
+            'description': 'Flag Local Outliers (LOF)',
+            'recommended': True,
+            'rationale': 'Identify local density anomalies using Local Outlier Factor. Adds a flag column rather than deleting rows.',
+            'newFeatures': ['is_anomaly_lof'],
+            'impact': 'Adds 1 binary column',
+            'group': 'anomaly_detection',
+            'params': {'n_neighbors': 20}
+        })
+
+    except Exception as e:
+        print(f"Unsupervised discovery failed: {e}")
+        
+    return suggestions
+

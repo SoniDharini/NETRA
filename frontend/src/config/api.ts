@@ -42,6 +42,7 @@ export const API_ENDPOINTS = {
   APPLY_PREPROCESSING: '/datasets/apply-preprocessing/',
   DOWNLOAD_PREPROCESSED_DATA: '/datasets/download-preprocessed/',
   GET_FEATURE_ENGINEERING_SUGGESTIONS: '/datasets/feature-engineering-suggestions/',
+  AUTO_PROCESS_DATASET: '/datasets/auto-process/',
   
   // Model Training
   GET_MODEL_RECOMMENDATIONS: '/models/recommendations',

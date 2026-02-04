@@ -155,8 +155,11 @@ export function PreprocessingPage({ onNavigate, projectData, updateProjectData, 
 
           const allSuggestions = res.data.suggestions.map((s, i) => ({ ...s, id: `sugg_${s.type}_${i}` }));
 
-          setCleaningSuggestions(allSuggestions.filter(s => s.group === 'cleaning'));
-          setFeatureSuggestions(allSuggestions.filter(s => s.group === 'creation'));
+          const cleaningGroups = new Set(['cleaning', 'encoding', 'scaling', 'feature_selection', 'anomaly_detection']);
+          const featureGroups = new Set(['creation', 'transformation', 'discretization', 'datetime', 'text', 'semantic', 'feature_augmentation', 'clustering', 'polynomial', 'interaction', 'ml_driven', 'group_aggregate', 'target_encoding', 'log_transform', 'binning']);
+
+          setCleaningSuggestions(allSuggestions.filter(s => cleaningGroups.has(s.group || 'cleaning')));
+          setFeatureSuggestions(allSuggestions.filter(s => featureGroups.has(s.group || 'creation') || (!cleaningGroups.has(s.group || '') && !featureGroups.has(s.group || ''))));
 
           if (selectedSteps.size === 0) {
             const recommended = new Set(allSuggestions.filter(o => o.recommended).map(o => o.id));
@@ -229,6 +232,46 @@ export function PreprocessingPage({ onNavigate, projectData, updateProjectData, 
     }
   };
 
+  const handleAutoProcess = async () => {
+    if (!activeFile?.fileId) return;
+
+    console.log(`[Preprocessing] Starting IDPRA Auto-Processing for fileId: ${activeFile.fileId}`);
+
+    setIsProcessing(true);
+    setProcessingProgress(0);
+    // Simulation of progress
+    const progressInterval = setInterval(() => setProcessingProgress(p => Math.min(p + 2, 95)), 300);
+
+    try {
+      const response = await apiService.autoProcessDataset(activeFile.fileId);
+      clearInterval(progressInterval);
+
+      if (response.success && response.data) {
+        setProcessingProgress(100);
+        const { processedFileId, summary, preview, appliedSteps } = response.data;
+
+        updateFile(activeFile.id, { fileId: processedFileId, data: preview });
+        updateProjectData({
+          preprocessingSteps: appliedSteps.map((s: any) => s.description),
+          processedFileId: processedFileId,
+        });
+
+        setResults({ summary, preview, stepsApplied: appliedSteps });
+        setIsComplete(true);
+        markStepComplete('preprocessing');
+        toast.success(summary || 'IDPRA Auto-Processing complete!');
+      } else {
+        throw new Error(response.error || 'Failed to auto-process data.');
+      }
+    } catch (error: any) {
+      clearInterval(progressInterval);
+      setProcessingProgress(0);
+      toast.error(error.message || 'An error occurred during IDPRA processing.');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const handleDownload = async () => {
     if (!projectData.processedFileId) return;
 
@@ -285,41 +328,35 @@ export function PreprocessingPage({ onNavigate, projectData, updateProjectData, 
 
       {profile && <ProfileDisplay profile={profile} />}
 
+
+
       {!isComplete ? (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2 space-y-6">
-            <Tabs defaultValue="cleaning">
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="cleaning">
-                  <Droplets className="w-4 h-4 mr-2" />Data Cleaning
-                </TabsTrigger>
-                <TabsTrigger value="feature-engineering">
-                  <Brain className="w-4 h-4 mr-2" />Feature Engineering
-                </TabsTrigger>
-              </TabsList>
-              <TabsContent value="cleaning">
-                <SuggestionCard
-                  title="Data Cleaning Suggestions"
-                  description="Recommended steps to clean and prepare your data."
-                  suggestions={cleaningSuggestions}
-                  selectedSteps={selectedSteps}
-                  toggleStep={toggleStep}
-                  isProcessing={isProcessing}
-                />
-              </TabsContent>
-              <TabsContent value="feature-engineering">
-                <SuggestionCard
-                  title="Feature Engineering Suggestions"
-                  description="Create new features to potentially improve model performance."
-                  suggestions={featureSuggestions}
-                  selectedSteps={selectedSteps}
-                  toggleStep={toggleStep}
-                  isProcessing={isProcessing}
-                />
-              </TabsContent>
-            </Tabs>
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          <div className="lg:col-span-4 space-y-6">
+            <SuggestionCard
+              title="Data Cleaning"
+              description="Missing values, outliers, encoding."
+              suggestions={cleaningSuggestions}
+              selectedSteps={selectedSteps}
+              toggleStep={toggleStep}
+              isProcessing={isProcessing}
+              icon={Droplets}
+            />
           </div>
-          <div className="lg:col-span-1">
+
+          <div className="lg:col-span-4 space-y-6">
+            <SuggestionCard
+              title="Feature Engineering"
+              description="New features, interactions, transformations."
+              suggestions={featureSuggestions}
+              selectedSteps={selectedSteps}
+              toggleStep={toggleStep}
+              isProcessing={isProcessing}
+              icon={Brain}
+            />
+          </div>
+
+          <div className="lg:col-span-4">
             <Card className="sticky top-4">
               <CardHeader>
                 <CardTitle>Processing Summary</CardTitle>
@@ -384,56 +421,66 @@ function ProfileDisplay({ profile }: { profile: DatasetProfile }) {
 
 // Sub-components for better organization
 
-function SuggestionCard({ title, description, suggestions, selectedSteps, toggleStep, isProcessing }: any) {
+function SuggestionCard({ title, description, suggestions, selectedSteps, toggleStep, isProcessing, icon: HeaderIcon }: any) {
   return (
-    <Card>
+    <Card className="h-full border-t-4 border-t-blue-500 shadow-sm">
       <CardHeader>
-        <CardTitle>{title}</CardTitle>
+        <CardTitle className="flex items-center text-lg">
+          {HeaderIcon && <HeaderIcon className="w-5 h-5 mr-2" />}
+          {title}
+        </CardTitle>
         <CardDescription>{description}</CardDescription>
       </CardHeader>
       <CardContent>
         {suggestions.length === 0 ? (
-          <p className="text-gray-500 text-sm">No suggestions available for this category.</p>
+          <p className="text-gray-500 text-sm italic">No suggestions available.</p>
         ) : (
           <Accordion type="single" collapsible className="w-full">
-            {suggestions.map((suggestion: Suggestion) => {
-              const Icon = getIcon(suggestion.type);
+            {suggestions.map((suggestion: any) => {
               const isSelected = selectedSteps.has(suggestion.id);
               return (
-                <AccordionItem value={suggestion.id} key={suggestion.id}>
-                  <AccordionTrigger disabled={isProcessing} onClick={() => toggleStep(suggestion.id)} className="hover:no-underline">
-                    <div className="flex items-center w-full pr-4">
-                      <Checkbox checked={isSelected} className="mr-4" />
-                      <Icon className="w-5 h-5 mr-3 text-gray-600" />
-                      <span className="flex-grow text-left">{suggestion.description}</span>
-                      {suggestion.recommended && <Badge variant="secondary" className="ml-2 bg-green-100 text-green-800">Recommended</Badge>}
+                <AccordionItem value={suggestion.id} key={suggestion.id} className="border-b last:border-0">
+                  <div className="flex items-start w-full p-3 hover:bg-gray-50/50 transition-colors">
+                    <div className="pt-0.5 mr-3">
+                      <Checkbox
+                        id={`chk-${suggestion.id}`}
+                        checked={isSelected}
+                        onCheckedChange={() => toggleStep(suggestion.id)}
+                      />
                     </div>
-                  </AccordionTrigger>
-                  <AccordionContent className="pl-12 text-sm text-gray-600 space-y-2">
+                    <div className="flex-1 min-w-0">
+                      <AccordionTrigger className="py-0 hover:no-underline text-left">
+                        <span className="text-sm font-medium text-gray-900 block truncate pr-4">
+                          {suggestion.description}
+                        </span>
+                      </AccordionTrigger>
+                      <div className="mt-1">
+                        {suggestion.recommended && (
+                          <Badge variant="secondary" className="text-xs bg-green-100 text-green-800 hover:bg-green-100 border-none">
+                            AI Recommended
+                          </Badge>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <AccordionContent className="px-3 pb-3 text-sm text-gray-600 bg-gray-50/30 rounded mx-2 mb-2">
                     {suggestion.rationale && (
-                      <div className="bg-blue-50 p-2 rounded border border-blue-100">
-                        <span className="font-semibold text-blue-900">Why: </span>
-                        {suggestion.rationale}
+                      <div className="flex gap-2 mb-2 pt-2">
+                        <Brain className="w-4 h-4 text-blue-500 flex-shrink-0 mt-0.5" />
+                        <div>
+                          <span className="font-semibold text-blue-900 block mb-0.5">AI Reasoning:</span>
+                          {suggestion.rationale}
+                        </div>
                       </div>
                     )}
-                    {(suggestion as any).impact && (
-                      <div className="bg-purple-50 p-2 rounded border border-purple-100">
-                        <span className="font-semibold text-purple-900">Impact: </span>
-                        {(suggestion as any).impact}
+                    {suggestion.newFeatures && suggestion.newFeatures.length > 0 && (
+                      <div className="text-xs font-mono bg-white p-1 border rounded opacity-80 inline-block">
+                        + Features: {suggestion.newFeatures.join(', ')}
                       </div>
-                    )}
-                    {(suggestion as any).newFeatures && (suggestion as any).newFeatures.length > 0 && (
-                      <div className="bg-gray-50 p-2 rounded border border-gray-100">
-                        <span className="font-semibold text-gray-900">Creates Features: </span>
-                        <span className="font-mono text-xs">{(suggestion as any).newFeatures.join(', ')}</span>
-                      </div>
-                    )}
-                    {!suggestion.rationale && !suggestion.details && (
-                      <p>This action will be applied to the column: {suggestion.column || 'N/A'}</p>
                     )}
                   </AccordionContent>
                 </AccordionItem>
-              )
+              );
             })}
           </Accordion>
         )}
@@ -441,6 +488,7 @@ function SuggestionCard({ title, description, suggestions, selectedSteps, toggle
     </Card>
   )
 }
+
 
 function ResultsDisplay({ results, onNavigate, onDownload }: any) {
   return (

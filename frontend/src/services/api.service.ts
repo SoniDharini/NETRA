@@ -394,6 +394,11 @@ class ApiService {
    * @param fileId - ID of the uploaded file
    * @param steps - Array of preprocessing steps to apply
    */
+  /**
+   * Apply preprocessing steps
+   * @param fileId - ID of the uploaded file
+   * @param steps - Array of preprocessing steps to apply
+   */
   async applyPreprocessing(
     fileId: string,
     steps: PreprocessingSuggestion[]
@@ -403,8 +408,9 @@ class ApiService {
     }
 
     try {
+      // Use RESTful endpoint: POST /datasets/dataset/{id}/preprocess/
       const response = await this.fetchWithTimeout(
-        `${this.baseUrl}${API_ENDPOINTS.APPLY_PREPROCESSING}`,
+        `${this.baseUrl}/datasets/dataset/${fileId}/preprocess/`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -421,9 +427,10 @@ class ApiService {
     }
   }
 
+  // ... (lines 422-488 remain unchanged usually, but I need to be careful with range)
+
   /**
    * Get feature engineering suggestions
-   * @param fileId - ID of the uploaded file
    */
   async getFeatureEngineeringSuggestions(
     fileId: string
@@ -451,6 +458,36 @@ class ApiService {
       }
   }
   
+
+  /**
+   * Run IDPRA Auto-Process
+   * @param fileId
+   */
+  async autoProcessDataset(
+    fileId: string
+  ): Promise<ApiResponse<{ processedFileId: string; summary: string; preview: DataPreview; appliedSteps: any[] }>> {
+    if (USE_MOCK_API) {
+        return { success: false, error: "Mock not implemented" };
+    }
+
+    try {
+        const response = await this.fetchWithTimeout(
+            `${this.baseUrl}${API_ENDPOINTS.AUTO_PROCESS_DATASET}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ fileId })
+            }
+        );
+        return this.handleResponse(response);
+    } catch (error: any) {
+        return {
+            success: false,
+            error: error.message || 'Failed to auto-process dataset'
+        };
+    }
+  }
+
     /**
    * Download preprocessed dataset (FULL dataset, not preview)
    * @param fileId - ID of the file to download
@@ -466,8 +503,9 @@ class ApiService {
     }
     
     try {
+      // Use RESTful endpoint: GET /datasets/dataset/{id}/download/
       const response = await this.fetchWithTimeout(
-        `${this.baseUrl}${API_ENDPOINTS.DOWNLOAD_PREPROCESSED_DATA}?fileId=${fileId}&format=${format}`,
+        `${this.baseUrl}/datasets/dataset/${fileId}/download/`,
         { method: 'GET' }
       );
       
