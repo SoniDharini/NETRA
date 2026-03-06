@@ -9,7 +9,7 @@ export const API_CONFIG = {
   // Development - Update this to point to your Flask/Django backend
   // For Flask (default): 'http://localhost:5000/api'
   // For Django (default): 'http://localhost:8000/api'
-  BASE_URL: 'http://localhost:8000/api',
+  BASE_URL: 'http://localhost:8000/api/',
   
   // Production - Uncomment and update this when deploying
   // BASE_URL: 'https://your-backend-domain.com/api',
@@ -23,26 +23,29 @@ export const API_CONFIG = {
 
 export const API_ENDPOINTS = {
   // Auth
-  LOGIN: '/auth/login/',
-  REGISTER: '/auth/register/',
-  REFRESH_TOKEN: '/auth/login/refresh/',
+  LOGIN: 'auth/login/',
+  REGISTER: 'auth/register/',
+  REFRESH_TOKEN: 'auth/login/refresh/',
 
   // Data Upload
-  UPLOAD_DATA: '/datasets/upload/',
-  VALIDATE_DATA: '/data/validate',
-  GET_DATA_PREVIEW: '/data/preview',
+  UPLOAD_DATA: 'datasets/upload/',
+  LIST_DATASETS: 'datasets/uploads/',
+  VALIDATE_DATA: 'datasets/get-data-profile/',
+  GET_DATA_PREVIEW: 'datasets/get-data-preview/',
   
   // Preprocessing
-  GET_PREPROCESSING_SUGGESTIONS: '/preprocessing/suggestions',
-  APPLY_PREPROCESSING: '/preprocessing/apply',
-  GET_FEATURE_ENGINEERING_SUGGESTIONS: '/preprocessing/feature-engineering',
+  GET_PREPROCESSING_SUGGESTIONS: 'datasets/preprocessing-suggestions/',
+  APPLY_PREPROCESSING: 'datasets/apply-preprocessing/',
+  PREPROCESS_DATASET: 'datasets/preprocess/',  // + datasetId
+  VISUALIZE_DATASET: 'datasets/visualize/',   // + datasetId
+  GET_FEATURE_ENGINEERING_SUGGESTIONS: 'datasets/feature-engineering-suggestions/',
   
   // Model Training
-  GET_MODEL_RECOMMENDATIONS: '/models/recommendations',
-  UPLOAD_CUSTOM_MODEL: '/models/upload',
-  TRAIN_MODEL: '/models/train',
-  GET_TRAINING_STATUS: '/models/training-status',
-  GET_MODEL_METRICS: '/models/metrics',
+  GET_MODEL_RECOMMENDATIONS: '/models/recommendations/',
+  UPLOAD_CUSTOM_MODEL: '/models/upload/',
+  TRAIN_MODEL: '/models/train/',
+  GET_TRAINING_STATUS: '/models/training-status/',
+  GET_MODEL_METRICS: '/models/metrics/',
   
   // Visualization
   GET_VISUALIZATION_SUGGESTIONS: '/visualizations/suggestions',

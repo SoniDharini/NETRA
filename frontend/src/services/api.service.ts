@@ -20,11 +20,79 @@ api.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('accessToken');
     if (token) {
-      config.headers['Authorization'] = `Bearer ${token}`;
+      if (config.headers) {
+        config.headers.Authorization = `Bearer ${token}`;
+      } else {
+        config.headers = { Authorization: `Bearer ${token}` } as any;
+      }
     }
     return config;
   },
   (error) => {
+    return Promise.reject(error);
+  }
+);
+
+// Refresh token on 401 and retry
+let isRefreshing = false;
+let failedQueue: Array<{ resolve: (value?: unknown) => void; reject: (reason?: any) => void }> = [];
+
+const processQueue = (error: any, token: string | null = null) => {
+  failedQueue.forEach((prom) => {
+    if (error) {
+      prom.reject(error);
+    } else if (token) {
+      prom.resolve(token);
+    }
+  });
+  failedQueue = [];
+};
+
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const originalRequest = error.config;
+
+    if (error.response?.status === 401 && !originalRequest._retry) {
+      if (isRefreshing) {
+        return new Promise((resolve, reject) => {
+          failedQueue.push({ resolve, reject });
+        }).then((token) => {
+          originalRequest.headers.Authorization = `Bearer ${token}`;
+          return api(originalRequest);
+        });
+      }
+
+      originalRequest._retry = true;
+      isRefreshing = true;
+
+      const refreshToken = localStorage.getItem('refreshToken');
+      if (!refreshToken) {
+        isRefreshing = false;
+        processQueue(error, null);
+        localStorage.removeItem('accessToken');
+        window.location.reload();
+        return Promise.reject(error);
+      }
+
+      try {
+        const response = await api.post(API_ENDPOINTS.REFRESH_TOKEN, { refresh: refreshToken });
+        const { access } = response.data;
+        localStorage.setItem('accessToken', access);
+        processQueue(null, access);
+        originalRequest.headers.Authorization = `Bearer ${access}`;
+        return api(originalRequest);
+      } catch (refreshError) {
+        processQueue(refreshError, null);
+        localStorage.removeItem('accessToken');
+        localStorage.removeItem('refreshToken');
+        window.location.reload();
+        return Promise.reject(refreshError);
+      } finally {
+        isRefreshing = false;
+      }
+    }
+
     return Promise.reject(error);
   }
 );
@@ -186,17 +254,32 @@ class ApiService {
     formData.append('file', file);
     formData.append('name', file.name);
 
-
     try {
         const response = await api.post(API_ENDPOINTS.UPLOAD_DATA, formData, {
-            headers: {
-                'Content-Type': 'multipart/form-data',
-            },
             onUploadProgress,
+            headers: {
+              // Don't set Content-Type manually, let the browser do it for FormData
+            }
         });
         return { success: true, data: response.data };
     } catch (error: any) {
-        return { success: false, error: error.response?.data?.error || error.message };
+        return { success: false, error: error.response?.data?.error || error.response?.data?.detail || error.message };
+    }
+  }
+
+  /**
+   * List all datasets for the current user
+   */
+  async listDatasets(): Promise<ApiResponse<any[]>> {
+    try {
+      const response = await api.get(API_ENDPOINTS.LIST_DATASETS || 'datasets/uploads/');
+      const data = response.data;
+      return { success: true, data: Array.isArray(data) ? data : (data?.results ?? data?.data ?? []) };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.response?.data?.error || error.message || 'Failed to list datasets',
+      };
     }
   }
 
@@ -206,11 +289,15 @@ class ApiService {
    */
   async validateData(fileId: string): Promise<ApiResponse<{ valid: boolean; issues: string[] }>> {
     try {
+      const token = localStorage.getItem('accessToken');
       const response = await this.fetchWithTimeout(
         `${this.baseUrl}${API_ENDPOINTS.VALIDATE_DATA}`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': token ? `Bearer ${token}` : '',
+          },
           body: JSON.stringify({ fileId }),
         }
       );
@@ -225,16 +312,35 @@ class ApiService {
   }
 
   /**
+   * Download the preprocessed dataset (usually returns a CSV blob)
+   */
+  async downloadPreprocessedDataset(fileId: string): Promise<ApiResponse<Blob>> {
+    try {
+      const response = await api.get(`datasets/dataset/${fileId}/download/`, { responseType: 'blob' });
+      return { success: true, data: response.data };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.response?.data?.error || error.message || 'Network error during download',
+      };
+    }
+  }
+
+  /**
    * Get data preview
    * @param fileId - ID of the uploaded file
    * @param limit - Number of rows to preview (default: 5)
    */
   async getDataPreview(fileId: string, limit: number = 5): Promise<ApiResponse<DataPreview>> {
     try {
+      const token = localStorage.getItem('accessToken');
       const response = await this.fetchWithTimeout(
         `${this.baseUrl}${API_ENDPOINTS.GET_DATA_PREVIEW}?fileId=${fileId}&limit=${limit}`,
         {
           method: 'GET',
+          headers: {
+            'Authorization': token ? `Bearer ${token}` : '',
+          },
         }
       );
 
@@ -261,20 +367,49 @@ class ApiService {
     }
 
     try {
-      const response = await this.fetchWithTimeout(
-        `${this.baseUrl}${API_ENDPOINTS.GET_PREPROCESSING_SUGGESTIONS}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fileId }),
-        }
-      );
-
-      return this.handleResponse(response);
+      const response = await api.post(API_ENDPOINTS.GET_PREPROCESSING_SUGGESTIONS, { fileId });
+      const data = response.data?.data ?? response.data;
+      return { success: true, data: Array.isArray(data) ? data : [] };
     } catch (error: any) {
       return {
         success: false,
-        error: error.message || 'Failed to get preprocessing suggestions',
+        error: error.response?.data?.error || error.message || 'Failed to get preprocessing suggestions',
+      };
+    }
+  }
+
+  /**
+   * Run full preprocessing pipeline (no steps - auto pipeline)
+   * @param datasetId - ID of the dataset
+   */
+  async preprocessDataset(datasetId: string): Promise<ApiResponse<{ dataset_id: number; rows: number; columns: string[]; preprocessing_applied: boolean; summary: any }>> {
+    try {
+      const response = await api.post(
+        `datasets/preprocess/${datasetId}/`
+      );
+      return { success: true, data: response.data };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.response?.data?.error || error.message || 'Preprocessing failed',
+      };
+    }
+  }
+
+  /**
+   * Get visualization chart data (histogram, bar, correlation)
+   * @param datasetId - ID of the dataset
+   */
+  async getVisualizationData(datasetId: string): Promise<ApiResponse<{ histogram: any; bar_chart: any; correlation: any; numeric_summary: any }>> {
+    try {
+      const response = await api.get(
+        `datasets/visualize/${datasetId}/`
+      );
+      return { success: true, data: response.data };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.response?.data?.error || error.message || 'Failed to get visualization data',
       };
     }
   }
@@ -293,20 +428,13 @@ class ApiService {
     }
 
     try {
-      const response = await this.fetchWithTimeout(
-        `${this.baseUrl}${API_ENDPOINTS.APPLY_PREPROCESSING}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fileId, steps }),
-        }
-      );
-
-      return this.handleResponse(response);
+      const response = await api.post(API_ENDPOINTS.APPLY_PREPROCESSING, { fileId, steps });
+      const data = response.data?.data ?? response.data;
+      return { success: true, data };
     } catch (error: any) {
       return {
         success: false,
-        error: error.message || 'Failed to apply preprocessing',
+        error: error.response?.data?.error || error.message || 'Failed to apply preprocessing',
       };
     }
   }
@@ -323,20 +451,13 @@ class ApiService {
     }
 
     try {
-      const response = await this.fetchWithTimeout(
-        `${this.baseUrl}${API_ENDPOINTS.GET_FEATURE_ENGINEERING_SUGGESTIONS}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fileId }),
-        }
-      );
-
-      return this.handleResponse(response);
+      const response = await api.post(API_ENDPOINTS.GET_FEATURE_ENGINEERING_SUGGESTIONS, { fileId });
+      const data = response.data?.data ?? response.data;
+      return { success: true, data: Array.isArray(data) ? data : [] };
     } catch (error: any) {
       return {
         success: false,
-        error: error.message || 'Failed to get feature engineering suggestions',
+        error: error.response?.data?.error || error.message || 'Failed to get feature engineering suggestions',
       };
     }
   }
@@ -355,11 +476,15 @@ class ApiService {
     }
 
     try {
+      const token = localStorage.getItem('accessToken');
       const response = await this.fetchWithTimeout(
         `${this.baseUrl}${API_ENDPOINTS.GET_MODEL_RECOMMENDATIONS}`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': token ? `Bearer ${token}` : '',
+          },
           body: JSON.stringify({ fileId }),
         }
       );
@@ -382,10 +507,14 @@ class ApiService {
     formData.append('model', file);
 
     try {
+      const token = localStorage.getItem('accessToken');
       const response = await this.fetchWithTimeout(
         `${this.baseUrl}${API_ENDPOINTS.UPLOAD_CUSTOM_MODEL}`,
         {
           method: 'POST',
+          headers: {
+            'Authorization': token ? `Bearer ${token}` : '',
+          },
           body: formData,
         }
       );
@@ -399,6 +528,10 @@ class ApiService {
     }
   }
 
+<<<<<<< Updated upstream
+=======
+
+>>>>>>> Stashed changes
   /**
    * Train a machine learning model
    * @param fileId - ID of the preprocessed file
@@ -417,11 +550,15 @@ class ApiService {
     }
 
     try {
+      const token = localStorage.getItem('accessToken');
       const response = await this.fetchWithTimeout(
         `${this.baseUrl}${API_ENDPOINTS.TRAIN_MODEL}`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': token ? `Bearer ${token}` : '',
+          },
           body: JSON.stringify({ fileId, modelName, targetColumn, params }),
         }
       );
@@ -443,10 +580,14 @@ class ApiService {
     trainingId: string
   ): Promise<ApiResponse<{ status: 'pending' | 'training' | 'completed' | 'failed'; progress: number }>> {
     try {
+      const token = localStorage.getItem('accessToken');
       const response = await this.fetchWithTimeout(
         `${this.baseUrl}${API_ENDPOINTS.GET_TRAINING_STATUS}/${trainingId}`,
         {
           method: 'GET',
+          headers: {
+            'Authorization': token ? `Bearer ${token}` : '',
+          },
         }
       );
 
@@ -469,10 +610,14 @@ class ApiService {
     }
 
     try {
+      const token = localStorage.getItem('accessToken');
       const response = await this.fetchWithTimeout(
         `${this.baseUrl}${API_ENDPOINTS.GET_MODEL_METRICS}/${trainingId}`,
         {
           method: 'GET',
+          headers: {
+            'Authorization': token ? `Bearer ${token}` : '',
+          },
         }
       );
 
@@ -490,6 +635,10 @@ class ApiService {
   /**
    * Get visualization suggestions based on data
    * @param fileId - ID of the file
+<<<<<<< Updated upstream
+=======
+
+>>>>>>> Stashed changes
    */
   async getVisualizationSuggestions(
     fileId: string
@@ -499,12 +648,16 @@ class ApiService {
     }
 
     try {
+      const token = localStorage.getItem('accessToken');
       const response = await this.fetchWithTimeout(
         `${this.baseUrl}${API_ENDPOINTS.GET_VISUALIZATION_SUGGESTIONS}`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fileId }),
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': token ? `Bearer ${token}` : '',
+          },
+          body: JSON.stringify({ fileId }), // Pass fileId correctly
         }
       );
 
@@ -518,6 +671,7 @@ class ApiService {
   }
 
   /**
+<<<<<<< Updated upstream
    * Generate a visualization
    * @param fileId - ID of the file
    * @param vizType - Type of visualization
@@ -539,6 +693,34 @@ class ApiService {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ fileId, vizType, config }),
+=======
+   * Save visualization configuration
+   */
+  async saveVisualization(
+    datasetId: string,
+    title: string,
+    chartType: string,
+    config: any,
+    isAiRecommended: boolean = false
+  ): Promise<ApiResponse<any>> {
+    try {
+      const token = localStorage.getItem('accessToken');
+      const response = await this.fetchWithTimeout(
+        `${this.baseUrl}${API_ENDPOINTS.SAVE_VISUALIZATION}`,
+        {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': token ? `Bearer ${token}` : '',
+          },
+          body: JSON.stringify({ 
+            dataset_id: datasetId,
+            title,
+            chart_type: chartType,
+            config,
+            is_ai_recommended: isAiRecommended
+          }),
+>>>>>>> Stashed changes
         }
       );
 
@@ -546,12 +728,20 @@ class ApiService {
     } catch (error: any) {
       return {
         success: false,
+<<<<<<< Updated upstream
         error: error.message || 'Failed to generate visualization',
+=======
+        error: error.message || 'Failed to save visualization',
+>>>>>>> Stashed changes
       };
     }
   }
 
   /**
+<<<<<<< Updated upstream
+=======
+
+>>>>>>> Stashed changes
    * Process Natural Language Query for visualization
    * @param fileId - ID of the file
    * @param query - Natural language query (e.g., "Show correlation between age and income")
@@ -561,11 +751,15 @@ class ApiService {
     query: string
   ): Promise<ApiResponse<{ visualization: any; interpretation: string }>> {
     try {
+      const token = localStorage.getItem('accessToken');
       const response = await this.fetchWithTimeout(
         `${this.baseUrl}${API_ENDPOINTS.PROCESS_NLQ}`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': token ? `Bearer ${token}` : '',
+          },
           body: JSON.stringify({ fileId, query }),
         }
       );
@@ -587,11 +781,15 @@ class ApiService {
    */
   async generateReport(projectData: any): Promise<ApiResponse<{ reportId: string }>> {
     try {
+      const token = localStorage.getItem('accessToken');
       const response = await this.fetchWithTimeout(
         `${this.baseUrl}${API_ENDPOINTS.GENERATE_REPORT}`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': token ? `Bearer ${token}` : '',
+          },
           body: JSON.stringify(projectData),
         }
       );
@@ -612,10 +810,14 @@ class ApiService {
    */
   async downloadReport(reportId: string, format: 'pdf' | 'docx'): Promise<Blob | null> {
     try {
+      const token = localStorage.getItem('accessToken');
       const response = await this.fetchWithTimeout(
         `${this.baseUrl}${API_ENDPOINTS.DOWNLOAD_REPORT}/${reportId}?format=${format}`,
         {
           method: 'GET',
+          headers: {
+            'Authorization': token ? `Bearer ${token}` : '',
+          },
         }
       );
 
@@ -638,11 +840,15 @@ class ApiService {
    */
   async saveProject(projectData: any): Promise<ApiResponse<{ projectId: string }>> {
     try {
+      const token = localStorage.getItem('accessToken');
       const response = await this.fetchWithTimeout(
         `${this.baseUrl}${API_ENDPOINTS.SAVE_PROJECT}`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': token ? `Bearer ${token}` : '',
+          },
           body: JSON.stringify(projectData),
         }
       );
@@ -662,10 +868,14 @@ class ApiService {
    */
   async getProject(projectId: string): Promise<ApiResponse<any>> {
     try {
+      const token = localStorage.getItem('accessToken');
       const response = await this.fetchWithTimeout(
         `${this.baseUrl}${API_ENDPOINTS.GET_PROJECT.replace(':id', projectId)}`,
         {
           method: 'GET',
+          headers: {
+            'Authorization': token ? `Bearer ${token}` : '',
+          },
         }
       );
 
@@ -683,10 +893,14 @@ class ApiService {
    */
   async listProjects(): Promise<ApiResponse<any[]>> {
     try {
+      const token = localStorage.getItem('accessToken');
       const response = await this.fetchWithTimeout(
         `${this.baseUrl}${API_ENDPOINTS.LIST_PROJECTS}`,
         {
           method: 'GET',
+          headers: {
+            'Authorization': token ? `Bearer ${token}` : '',
+          },
         }
       );
 
@@ -695,6 +909,36 @@ class ApiService {
       return {
         success: false,
         error: error.message || 'Failed to list projects',
+<<<<<<< Updated upstream
+=======
+      };
+    }
+  }
+
+  /**
+   * Get saved visualizations
+   */
+  async getSavedVisualizations(
+    datasetId: string
+  ): Promise<ApiResponse<any[]>> {
+    try {
+      const token = localStorage.getItem('accessToken');
+      const response = await this.fetchWithTimeout(
+        `${this.baseUrl}${API_ENDPOINTS.GET_SAVED_VISUALIZATIONS}${datasetId}/`,
+        {
+          method: 'GET',
+          headers: {
+            'Authorization': token ? `Bearer ${token}` : '',
+          },
+        }
+      );
+
+      return this.handleResponse(response);
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.message || 'Failed to get saved visualizations',
+>>>>>>> Stashed changes
       };
     }
   }

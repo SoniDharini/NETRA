@@ -47,9 +47,9 @@ function PreviewTable({ data, title }: { data: any[], title: string }) {
 }
 
 export function Preprocessing({ onNavigate, projectData, updateProjectData, markStepComplete }: PreprocessingProps) {
-  // Get shared data from context
   const { files } = useData();
-  const activeFile = files.find(f => f.status === 'success' && f.fileId);
+  const activeFile = files.find(f => (f.status === 'completed' || f.status === 'success') && f.fileId);
+  const fileId = projectData.fileId || activeFile?.fileId;
 
   const [selectedSteps, setSelectedSteps] = useState<Set<string>>(new Set());
   const [isProcessing, setIsProcessing] = useState(false);
@@ -57,28 +57,42 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
   const [isComplete, setIsComplete] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [preprocessingOptions, setPreprocessingOptions] = useState<any[]>([]);
-  const [aiSuggestions, setAiSuggestions] = useState<FeatureEngineeringSuggestion[]>([]);
+  const [featureOptions, setFeatureOptions] = useState<any[]>([]);
 
   useEffect(() => {
     const fetchSuggestions = async () => {
-      if (!activeFile?.fileId) {
+      if (!fileId) {
         setIsLoading(false);
         return;
       }
       try {
-        const prepResponse = await apiService.getPreprocessingSuggestions(activeFile.fileId);
+        const [prepResponse, feResponse] = await Promise.all([
+          apiService.getPreprocessingSuggestions(String(fileId)),
+          apiService.getFeatureEngineeringSuggestions(String(fileId)),
+        ]);
         if (prepResponse.success && prepResponse.data) {
-          const options = prepResponse.data.map((suggestion: PreprocessingSuggestion) => ({
-            id: suggestion.type,
-            label: suggestion.description.split(':')[0],
-            description: suggestion.description.split(': ')[1] || suggestion.description,
-            icon: getIcon(suggestion.type),
-            suggested: suggestion.recommended,
-            column: suggestion.column,
-          }));
+          const options = (prepResponse.data as any[]).map((suggestion: any, idx: number) => {
+            const uniqueId = `${suggestion.type}_${suggestion.column || idx}`;
+            return {
+              id: uniqueId,
+              rawType: suggestion.type,
+              label: (suggestion.description || '').split(':')[0]?.trim() || suggestion.type,
+              description: (suggestion.description || '').split(': ')[1] || suggestion.description || '',
+              icon: getIcon(suggestion.type),
+              suggested: suggestion.recommended,
+              column: suggestion.column,
+              params: suggestion.params || {},
+            };
+          });
           setPreprocessingOptions(options);
         }
-        // ... fetch other suggestions if needed
+        if (feResponse.success && feResponse.data) {
+          const feOpts = (feResponse.data as any[]).map((s: any, idx: number) => ({
+            id: `fe_${s.type || 'fe'}_${idx}`,
+            ...s,
+          }));
+          setFeatureOptions(feOpts);
+        }
       } catch (error) {
         toast.error('Failed to load AI suggestions.');
       } finally {
@@ -87,7 +101,7 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
     };
 
     fetchSuggestions();
-  }, [activeFile]);
+  }, [fileId]);
 
   const getIcon = (type: string) => ({
     remove_duplicates: Trash2, fill_missing: Droplets, encode_categorical: Code,
@@ -103,31 +117,42 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
   };
 
   const handleProcess = async () => {
-    if (selectedSteps.size === 0 || !activeFile?.fileId) return;
+    if (!fileId) return;
 
     setIsProcessing(true);
     setProcessingProgress(0);
     const progressInterval = setInterval(() => setProcessingProgress(p => Math.min(p + 10, 90)), 300);
 
     try {
-      const steps = Array.from(selectedSteps).map(id => {
-        const option = preprocessingOptions.find(opt => opt.id === id);
-        return { type: id, ...option } as PreprocessingSuggestion;
-      });
-
-      const response = await apiService.applyPreprocessing(activeFile.fileId, steps);
+      let response;
+      if (selectedSteps.size > 0) {
+        const steps = Array.from(selectedSteps).map(id => {
+          const option = preprocessingOptions.find(opt => opt.id === id);
+          return {
+            type: option?.rawType || option?.id?.split('_')[0] || id,
+            column: option?.column,
+            params: option?.params || {},
+          } as PreprocessingSuggestion;
+        });
+        response = await apiService.applyPreprocessing(String(fileId), steps);
+      } else {
+        response = await apiService.preprocessDataset(String(fileId));
+      }
       clearInterval(progressInterval);
       setProcessingProgress(100);
 
       if (response.success && response.data) {
-        const { processedFileId, summary } = response.data;
+        const data = response.data as any;
+        const processedFileId = data.processedFileId ?? data.dataset_id ?? data.id ?? fileId;
+        const summary = data.summary?.summary ?? data.summary ?? (typeof data.summary === 'string' ? data.summary : 'Preprocessing complete!');
         updateProjectData({
-          preprocessingSteps: Array.from(selectedSteps).map(id => preprocessingOptions.find(opt => opt.id === id)?.label || id),
-          // preprocessedData should be the new preview from the backend
-          fileId: processedFileId,
+          preprocessingSteps: selectedSteps.size > 0
+            ? Array.from(selectedSteps).map(id => preprocessingOptions.find(opt => opt.id === id)?.label || id)
+            : ['Full pipeline (missing values, duplicates, normalize, encode)'],
+          fileId: String(processedFileId),
         });
         setIsComplete(true);
-        toast.success(summary || 'Preprocessing complete!');
+        toast.success(typeof summary === 'string' ? summary : `Rows: ${data.rows ?? 'N/A'}, Columns: ${(data.columns ?? []).length}`);
       } else {
         toast.error(response.error || 'Failed to preprocess data.');
       }
@@ -142,7 +167,7 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
     return <div className="flex justify-center items-center h-full"><Loader2 className="w-8 h-8 animate-spin" /></div>;
   }
 
-  if (!activeFile) {
+  if (!fileId) {
     return (
       <div className="max-w-6xl mx-auto">
         <Alert>
@@ -164,7 +189,10 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
         <p className="text-gray-600">Clean and prepare your data for analysis.</p>
       </div>
       
-      <PreviewTable data={activeFile.preview?.rows ?? []} title={`Preview of ${activeFile.file.name}`} />
+      <PreviewTable
+        data={Array.isArray(activeFile?.preview) ? activeFile.preview : (activeFile?.preview as any)?.rows ?? []}
+        title={`Preview of ${activeFile?.name || activeFile?.file?.name || 'dataset'}`}
+      />
 
       <Card>
         <CardHeader>
@@ -205,15 +233,42 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
         </Alert>
       )}
 
-      <div className="flex justify-between pt-2">
+      {featureOptions.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Feature Engineering Suggestions</CardTitle>
+            <CardDescription>AI-recommended feature engineering steps (applied with full pipeline).</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2 text-sm text-gray-600">
+              {featureOptions.slice(0, 8).map((opt) => (
+                <div key={opt.id} className="flex items-start gap-2 p-2 rounded border bg-gray-50">
+                  <Brain className="w-4 h-4 mt-0.5 flex-shrink-0 text-purple-500" />
+                  <div>
+                    <p className="font-medium text-gray-800">{opt.name || opt.type}</p>
+                    <p className="text-xs">{opt.description}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      <div className="flex flex-wrap justify-between gap-2 pt-2">
         <Button variant="outline" onClick={() => onNavigate('upload')}>Back to Upload</Button>
-        <Button onClick={handleProcess} disabled={isProcessing || selectedSteps.size === 0 || isComplete}>
+        <Button onClick={handleProcess} disabled={isProcessing || isComplete}>
           {isProcessing ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Processing...</> : 'Apply Preprocessing'}
         </Button>
         {isComplete && (
-          <Button onClick={() => { markStepComplete('preprocessing'); onNavigate('training'); }}>
-            Continue to Model Training <ArrowRight className="w-4 h-4 ml-2" />
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => { markStepComplete('preprocessing'); onNavigate('visualization'); }}>
+              Continue to Visualization <ArrowRight className="w-4 h-4 ml-2" />
+            </Button>
+            <Button onClick={() => { markStepComplete('preprocessing'); onNavigate('training'); }}>
+              Continue to Model Training <ArrowRight className="w-4 h-4 ml-2" />
+            </Button>
+          </div>
         )}
       </div>
     </div>

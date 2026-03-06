@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, ReactNode } from 'react';
 
 // ========= TYPES =========
-export type FileStatus = 
+export type FileStatus =
   | 'waiting'       // Initial state before any processing
   | 'hashing'       // Calculating file hash
   | 'uploading'     // Actively uploading chunks
@@ -18,16 +18,18 @@ export interface PreviewData {
 
 export interface UploadedFile {
   id: string;          // Unique UI identifier
-  file: File;
+  file?: File;
+  name?: string;       // Fallback for file.name
+  size?: number;       // Fallback for file.size
   status: FileStatus;
   progress: number;    // Overall progress (0-100)
-  
+
   // Resumability & Integrity
   uploadId?: string;     // Unique identifier for the upload session
   fileHash?: string;     // SHA-256 hash of the file
   chunkCount?: number;   // Total number of chunks
   uploadedChunks?: number; // Number of chunks successfully uploaded
-  
+
   // Data & State
   preview?: PreviewData;
   error?: string;
@@ -40,7 +42,7 @@ interface DataContextType {
   setFiles: React.Dispatch<React.SetStateAction<UploadedFile[]>>;
   addFiles: (files: UploadedFile[]) => void;
   updateFile: (id: string, updates: Partial<UploadedFile>) => void;
-  removeFile: (id:string) => void;
+  removeFile: (id: string) => void;
 }
 
 // ========= CONTEXT CREATION =========

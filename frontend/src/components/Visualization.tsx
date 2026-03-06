@@ -1,8 +1,15 @@
 import { useState, useEffect } from 'react';
 import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
+<<<<<<< Updated upstream
 import { toast } from 'sonner@2.0.3';
 import { Layout, MessageSquare, Settings } from 'lucide-react';
+=======
+import { toast } from 'sonner';
+import { Layout, MessageSquare, Settings, Loader2, Plus, Trash2, Edit2, BarChart3 } from 'lucide-react';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
+import Papa from 'papaparse';
+>>>>>>> Stashed changes
 import { ProjectData } from '../App';
 import { Alert, AlertDescription } from './ui/alert';
 import { Button } from './ui/button';
@@ -80,9 +87,12 @@ export function Visualization({ onNavigate, projectData, updateProjectData, mark
   const [showSuggestions, setShowSuggestions] = useState(true);
   const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
   const [lastAppliedSuggestion, setLastAppliedSuggestion] = useState<any>(null);
+  const [chartData, setChartData] = useState<{ histogram: any; bar_chart: any; correlation: any } | null>(null);
+  const [isLoadingCharts, setIsLoadingCharts] = useState(false);
 
   // Initialize fields from the dataset
   useEffect(() => {
+<<<<<<< Updated upstream
     if (projectData.dataPreview && projectData.dataPreview.length > 0) {
       const sampleRow = projectData.dataPreview[0];
       const detectedFields: FieldItem[] = Object.keys(sampleRow).map((key) => {
@@ -106,6 +116,102 @@ export function Visualization({ onNavigate, projectData, updateProjectData, mark
       generateMockFields();
       // Also fetch suggestions for mock data
       fetchAiSuggestions();
+=======
+    const initializeVisualization = async () => {
+      if (projectData.fileId) {
+        setIsDataLoading(true);
+        try {
+          // 1. Fetch Full Dataset via dedicated endpoint (returns blob)
+          const blobResponse = await apiService.downloadPreprocessedDataset(projectData.fileId);
+
+          if (blobResponse.success && blobResponse.data) {
+            // Convert Blob to Text first ensures robust parsing
+            const text = await blobResponse.data.text();
+
+            // Parse CSV
+            Papa.parse(text, {
+              header: true,
+              dynamicTyping: true,
+              skipEmptyLines: true,
+              complete: (results) => {
+                const data = results.data;
+                setFullDataset(data);
+
+                // Detect fields from the FIRST row of full dataset
+                if (data.length > 0) {
+                  const sampleRow = data[0];
+                  // Safe casting to avoid indexing errors
+                  const rowObj = sampleRow as Record<string, any>;
+                  const detectedFields: FieldItem[] = Object.keys(rowObj).map((key) => {
+                    const value = rowObj[key];
+                    const isNumber = typeof value === 'number' || (!isNaN(Number(value)) && value !== null && value !== undefined && value !== '');
+                    const isDate = !isNumber && typeof value === 'string' && !isNaN(Date.parse(value));
+
+                    return {
+                      name: key,
+                      type: isNumber ? 'measure' : 'dimension',
+                      dataType: isDate ? 'date' : isNumber ? 'number' : 'string',
+                    };
+                  });
+                  setFields(detectedFields);
+
+                  // 2. Fetch AI Suggestions (after we have data/fields)
+                  fetchAiSuggestions(detectedFields);
+                }
+                setIsDataLoading(false);
+              },
+              error: (error: any) => {
+                console.error("CSV Parse Error", error);
+                toast.error("Failed to parse dataset");
+                setIsDataLoading(false);
+              }
+            });
+          } else {
+            // Fallback
+            setIsDataLoading(false);
+            generateMockFields();
+          }
+
+          // 3. Fetch Saved Visualizations
+          fetchSavedVisualizations();
+
+          // 4. Fetch chart data for histogram, bar, correlation
+          const vizRes = await apiService.getVisualizationData(projectData.fileId);
+          if (vizRes.success && vizRes.data) {
+            setChartData(vizRes.data);
+          }
+
+        } catch (error) {
+          console.error("Initialization error", error);
+          setIsDataLoading(false);
+          toast.error("Failed to initialize visualization workspace");
+        }
+      } else {
+        // Mock data
+        generateMockFields();
+      }
+    };
+
+    initializeVisualization();
+  }, [projectData.fileId]);
+
+  const fetchSavedVisualizations = async () => {
+    if (!projectData.fileId) return;
+    try {
+      const response = await apiService.getSavedVisualizations(projectData.fileId);
+      if (response.success && response.data) {
+        const saved = response.data.map((v: any) => ({
+          id: v.id,
+          name: v.title,
+          config: v.config,
+          chartType: v.chart_type,
+          timestamp: new Date(v.created_at)
+        }));
+        setSavedVisualizations(saved);
+      }
+    } catch (error) {
+      console.error("Failed to load saved visualizations", error);
+>>>>>>> Stashed changes
     }
   }, [projectData.dataPreview]);
 
@@ -427,6 +533,7 @@ export function Visualization({ onNavigate, projectData, updateProjectData, mark
               </>
             )}
 
+<<<<<<< Updated upstream
             {/* Canvas Area */}
             <div className="flex-1 p-4 overflow-auto bg-gray-50 min-h-0">
               <ChartCanvas
@@ -435,6 +542,146 @@ export function Visualization({ onNavigate, projectData, updateProjectData, mark
                 data={chartData}
                 onExport={handleExportChart}
               />
+=======
+            {/* Canvas Area - Renders ALL Loop */}
+            <div className="flex-1 p-6 overflow-auto bg-gray-50 min-h-0">
+              {/* 1. Render the 'Active' Worksheet visual being built/edited */}
+              {/* Separated from the list for clarity, or added to list? 
+                    User asked for "Canvas Loop". 
+                    I will render the `canvasVisuals` list.
+                */}
+
+              {activeMode === 'worksheet' && (chartConfig.columns.length > 0 || chartConfig.rows.length > 0) && (
+                <div className="mb-8 border-b-2 border-dashed border-gray-300 pb-8">
+                  <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-4">Worksheet Scratchpad</h3>
+                  <div className="bg-white p-4 rounded-lg shadow-sm border h-96 flex flex-col">
+                    <ChartCanvas
+                      config={chartConfig}
+                      chartType={chartType}
+                      data={getProcessedData(fullDataset, chartConfig, chartType)}
+                      onExport={() => { }}
+                    />
+                    <div className="mt-2 flex justify-end">
+                      <Button size="sm" onClick={() => {
+                        setCanvasVisuals(prev => [...prev, {
+                          id: `canvas-manual-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+                          type: chartType,
+                          config: chartConfig,
+                          title: "New Chart",
+                          dataset_id: projectData.fileId
+                        }]);
+                        toast.success("Added to Canvas");
+                      }}>
+                        <Plus className="w-4 h-4 mr-1" /> Add to Canvas
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+
+              {chartData && (chartData.histogram?.column || chartData.bar_chart?.column || chartData.correlation?.columns?.length) > 0 && (
+                <div className="mb-8">
+                  <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-4 flex items-center gap-2">
+                    <BarChart3 className="w-4 h-4" /> Quick Charts (from API)
+                  </h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {chartData.histogram?.column && chartData.histogram.values?.length > 0 && (
+                      <div className="bg-white p-4 rounded-lg border h-72">
+                        <p className="text-sm font-medium text-gray-700 mb-2">Histogram: {chartData.histogram.column}</p>
+                        <ResponsiveContainer width="100%" height={200}>
+                          <BarChart data={(chartData.histogram.labels || []).map((l: string, i: number) => ({ name: l, value: chartData.histogram.values[i] ?? 0 }))}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="name" tick={{ fontSize: 10 }} />
+                            <YAxis />
+                            <Tooltip />
+                            <Bar dataKey="value" fill="#3b82f6" />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    )}
+                    {chartData.bar_chart?.column && chartData.bar_chart.values?.length > 0 && (
+                      <div className="bg-white p-4 rounded-lg border h-72">
+                        <p className="text-sm font-medium text-gray-700 mb-2">Bar Chart: {chartData.bar_chart.column}</p>
+                        <ResponsiveContainer width="100%" height={200}>
+                          <BarChart data={(chartData.bar_chart.labels || []).map((l: string, i: number) => ({ name: String(l), value: chartData.bar_chart.values[i] ?? 0 }))}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="name" tick={{ fontSize: 10 }} />
+                            <YAxis />
+                            <Tooltip />
+                            <Bar dataKey="value" fill="#10b981" />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    )}
+                    {chartData.correlation?.columns?.length > 0 && (
+                      <div className="bg-white p-4 rounded-lg border h-72 overflow-auto">
+                        <p className="text-sm font-medium text-gray-700 mb-2">Correlation Matrix</p>
+                        <div className="overflow-x-auto text-xs">
+                          <table className="min-w-full border-collapse">
+                            <thead>
+                              <tr>
+                                <th className="border p-1 bg-gray-100"></th>
+                                {chartData.correlation.columns.slice(0, 6).map((c: string) => (
+                                  <th key={c} className="border p-1 bg-gray-100 truncate max-w-[60px]" title={c}>{c}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {chartData.correlation.matrix?.slice(0, 6).map((row: number[], i: number) => (
+                                <tr key={i}>
+                                  <td className="border p-1 bg-gray-50 font-medium truncate max-w-[60px]" title={chartData.correlation.columns[i]}>{chartData.correlation.columns[i]}</td>
+                                  {row.slice(0, 6).map((v: number, j: number) => (
+                                    <td key={j} className="border p-1 text-center" style={{ backgroundColor: v != null ? `rgba(59,130,246,${Math.abs(v)})` : 'transparent' }}>
+                                      {v != null ? v.toFixed(2) : '-'}
+                                    </td>
+                                  ))}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-4">Canvas ({canvasVisuals.length})</h3>
+
+              {canvasVisuals.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 text-gray-400 border-2 border-dashed rounded-lg">
+                  <Layout className="w-12 h-12 mb-2 opacity-50" />
+                  <p>Canvas is empty. Use AI suggestions or build a chart above.</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {canvasVisuals.map((viz) => (
+                    <div key={viz.id} className="bg-white p-4 rounded-lg shadow border h-96 hover:shadow-md transition-shadow relative group flex flex-col">
+                      <div className="flex justify-between items-center mb-3">
+                        <div className="font-medium truncate pr-4">{viz.title || 'Untitled Chart'}</div>
+                        <div className="flex space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={(e: React.MouseEvent) => handleEditVisual(viz, e)}>
+                            <Edit2 className="w-3 h-3 text-blue-500" />
+                          </Button>
+                          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={(e: React.MouseEvent) => handleDeleteVisual(viz.id, e)}>
+                            <Trash2 className="w-3 h-3 text-red-500" />
+                          </Button>
+                        </div>
+                      </div>
+                      <div className="flex-1 h-80 min-h-0">
+                        <ChartCanvas
+                          config={viz.config}
+                          chartType={viz.type}
+                          data={getProcessedData(fullDataset, viz.config, viz.type)}
+                          onExport={() => { }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+>>>>>>> Stashed changes
             </div>
           </div>
 

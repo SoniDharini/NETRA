@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { Upload, FileText, CheckCircle, AlertCircle, X, ArrowRight, Loader2 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
@@ -54,8 +54,44 @@ function PreviewTable({ data }: { data: any }) {
 
 // ========= MAIN COMPONENT =========
 export function DataUpload({ onNavigate, markStepComplete, updateProjectData }: DataUploadProps) {
-  const { files, addFiles, updateFile, removeFile } = useData();
+  const { files, addFiles, updateFile, removeFile, setFiles } = useData();
   const [isUploading, setIsUploading] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  // Sync with backend on mount
+  useEffect(() => {
+    const syncDatasets = async () => {
+      setIsSyncing(true);
+      try {
+        const res = await apiService.listDatasets();
+        if (res.success && res.data) {
+          // Format backend datasets into UploadedFile format
+          const backendFiles: UploadedFile[] = res.data.map((ds: any) => ({
+            id: ds.id,
+            fileId: ds.id,
+            name: ds.name,
+            size: ds.file_size || 0,
+            status: 'completed',
+            progress: 100,
+            preview: ds.metadata?.preview,
+          }));
+
+          // Only add backend files that aren't already locally in state
+          setFiles(prev => {
+            const existingIds = prev.map(f => f.fileId).filter(Boolean);
+            const newOnes = backendFiles.filter(bf => !existingIds.includes(bf.fileId));
+            return [...prev, ...newOnes];
+          });
+        }
+      } catch (err) {
+        console.error("Failed to sync datasets", err);
+      } finally {
+        setIsSyncing(false);
+      }
+    };
+
+    syncDatasets();
+  }, [setFiles]);
 
   const onDrop = useCallback((acceptedFiles: File[], fileRejections: any[]) => {
     const newUploads: UploadedFile[] = [];
@@ -75,6 +111,9 @@ export function DataUpload({ onNavigate, markStepComplete, updateProjectData }: 
       if (uploadedFile.status === 'waiting') {
         try {
           updateFile(uploadedFile.id, { status: 'uploading', progress: 0 });
+          if (!uploadedFile.file) {
+            throw new Error("No local file source available for upload.");
+          }
           const res = await apiService.uploadDataset(uploadedFile.file, (progressEvent) => {
             const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total);
             updateFile(uploadedFile.id, { progress });
@@ -99,7 +138,7 @@ export function DataUpload({ onNavigate, markStepComplete, updateProjectData }: 
     }
     setIsUploading(false);
   };
-  
+
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     maxSize: MAX_FILE_SIZE_BYTES,
@@ -112,15 +151,15 @@ export function DataUpload({ onNavigate, markStepComplete, updateProjectData }: 
       toast.error('Please wait for a file to complete uploading.');
       return;
     }
-    
+
     updateProjectData({
-      fileName: completedFile.file.name,
+      fileName: completedFile.file?.name || completedFile.name || 'dataset.csv',
       fileId: completedFile.fileId,
     });
     markStepComplete('upload');
     onNavigate('preprocessing');
   };
-  
+
   const getStatusMessage = (file: UploadedFile): string => {
     switch (file.status) {
       case 'uploading':
@@ -165,8 +204,12 @@ export function DataUpload({ onNavigate, markStepComplete, updateProjectData }: 
                   <div className="flex items-center space-x-3">
                     <FileText className="w-6 h-6 text-gray-500" />
                     <div>
-                      <p className="font-medium text-gray-900">{uploadedFile.file.name}</p>
-                      <p className="text-sm text-gray-500">{(uploadedFile.file.size / (1024 * 1024)).toFixed(2)} MB</p>
+                      <p className="font-medium text-gray-900">
+                        {uploadedFile.file?.name || uploadedFile.name || 'Unknown File'}
+                      </p>
+                      <p className="text-sm text-gray-500">
+                        {((uploadedFile.file?.size || uploadedFile.size || 0) / (1024 * 1024)).toFixed(2)} MB
+                      </p>
                     </div>
                   </div>
                   <Button variant="ghost" size="icon" onClick={() => removeFile(uploadedFile.id)} disabled={isUploading}>
@@ -177,7 +220,7 @@ export function DataUpload({ onNavigate, markStepComplete, updateProjectData }: 
                 {(uploadedFile.status === 'uploading' || uploadedFile.status === 'completed') && (
                   <Progress value={uploadedFile.progress} className="mt-2" />
                 )}
-                
+
                 <p className="text-sm text-gray-500 mt-2">{getStatusMessage(uploadedFile)}</p>
 
                 {uploadedFile.status === 'error' && (
@@ -204,21 +247,21 @@ export function DataUpload({ onNavigate, markStepComplete, updateProjectData }: 
 
       {files.length > 0 && (
         <div className="flex justify-end mt-6">
-            <Button onClick={handleUpload} disabled={isUploading || files.every(f => f.status !== 'waiting')}>
-              {isUploading ? (
-                <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Uploading...</>
-              ) : (
-                'Upload'
-              )}
-            </Button>
+          <Button onClick={handleUpload} disabled={isUploading || files.every(f => f.status !== 'waiting')}>
+            {isUploading ? (
+              <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Uploading...</>
+            ) : (
+              'Upload'
+            )}
+          </Button>
         </div>
       )}
-      
+
       {files.some(f => f.status === 'completed') && (
         <div className="flex justify-end mt-6">
-            <Button onClick={handleContinue}>
-              <><ArrowRight className="w-4 h-4 mr-2" /> Continue to Preprocessing</>
-            </Button>
+          <Button onClick={handleContinue}>
+            <><ArrowRight className="w-4 h-4 mr-2" /> Continue to Preprocessing</>
+          </Button>
         </div>
       )}
     </div>
