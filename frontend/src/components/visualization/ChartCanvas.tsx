@@ -77,11 +77,14 @@ export function ChartCanvas({ config, chartType, data, onExport }: ChartCanvasPr
     );
   }
 
+  // Explicit height required for Recharts ResponsiveContainer (100% fails in flex layouts)
+  const CHART_HEIGHT = 320;
+
   // Render the appropriate chart based on type
   const renderChart = () => {
     if (chartData.length === 0) {
       return (
-        <div className="flex items-center justify-center h-full">
+        <div className="flex items-center justify-center" style={{ height: CHART_HEIGHT }}>
           <p className="text-gray-500">No data available for visualization</p>
         </div>
       );
@@ -90,7 +93,7 @@ export function ChartCanvas({ config, chartType, data, onExport }: ChartCanvasPr
     switch (chartType) {
       case 'bar':
         return (
-          <ResponsiveContainer width="100%" height="100%">
+          <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
             <BarChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
               <XAxis dataKey={xField} stroke="#6b7280" />
@@ -117,7 +120,7 @@ export function ChartCanvas({ config, chartType, data, onExport }: ChartCanvasPr
 
       case 'line':
         return (
-          <ResponsiveContainer width="100%" height="100%">
+          <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
             <LineChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
               <XAxis dataKey={xField} stroke="#6b7280" />
@@ -146,7 +149,7 @@ export function ChartCanvas({ config, chartType, data, onExport }: ChartCanvasPr
 
       case 'area':
         return (
-          <ResponsiveContainer width="100%" height="100%">
+          <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
             <AreaChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
               <XAxis dataKey={xField} stroke="#6b7280" />
@@ -175,7 +178,7 @@ export function ChartCanvas({ config, chartType, data, onExport }: ChartCanvasPr
 
       case 'scatter':
         return (
-          <ResponsiveContainer width="100%" height="100%">
+          <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
             <ScatterChart>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
               <XAxis dataKey={xField} name={xField} stroke="#6b7280" />
@@ -199,10 +202,10 @@ export function ChartCanvas({ config, chartType, data, onExport }: ChartCanvasPr
         );
 
       case 'pie':
-        // For pie chart, use the first measure
-        const pieDataKey = config.rows[0]?.name || yField;
+        // For pie chart, use the first measure or 'value' (from getProcessedData count aggregation)
+        const pieDataKey = config.rows[0]?.name || yField || 'value';
         return (
-          <ResponsiveContainer width="100%" height="100%">
+          <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
             <PieChart>
               <Pie
                 data={chartData}
@@ -231,8 +234,10 @@ export function ChartCanvas({ config, chartType, data, onExport }: ChartCanvasPr
         );
 
       case 'histogram':
+        // Histogram uses 'count' when rows is empty (frequency distribution)
+        const histDataKey = yField || 'count';
         return (
-          <ResponsiveContainer width="100%" height="100%">
+          <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
             <BarChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
               <XAxis dataKey={xField} stroke="#6b7280" />
@@ -246,7 +251,7 @@ export function ChartCanvas({ config, chartType, data, onExport }: ChartCanvasPr
               />
               <Legend />
               <Bar
-                dataKey={yField}
+                dataKey={histDataKey}
                 fill="#3b82f6"
                 radius={[4, 4, 0, 0]}
               />
@@ -256,7 +261,7 @@ export function ChartCanvas({ config, chartType, data, onExport }: ChartCanvasPr
 
       default:
         return (
-          <ResponsiveContainer width="100%" height="100%">
+          <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
             <BarChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
               <XAxis dataKey={xField} stroke="#6b7280" />
@@ -291,7 +296,7 @@ export function ChartCanvas({ config, chartType, data, onExport }: ChartCanvasPr
             {chartType.charAt(0).toUpperCase() + chartType.slice(1)} Chart
           </h3>
           <p className="text-gray-500">
-            {xField && yField ? `${xField} vs ${yField}` : 'Configure axes to see visualization'}
+            {xField && (yField || chartType === 'histogram') ? `${xField} vs ${yField || 'count'}` : 'Configure axes to see visualization'}
           </p>
         </div>
         <div className="flex items-center space-x-2">
@@ -305,8 +310,10 @@ export function ChartCanvas({ config, chartType, data, onExport }: ChartCanvasPr
           </Button>
         </div>
       </div>
-      <CardContent className="flex-1 p-6">
-        {renderChart()}
+      <CardContent className="flex-1 p-6 min-h-[280px] flex flex-col">
+        <div className="flex-1 min-h-[240px] w-full">
+          {renderChart()}
+        </div>
       </CardContent>
     </Card>
   );

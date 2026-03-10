@@ -9,6 +9,7 @@ import { Progress } from './ui/progress';
 import { toast } from 'sonner';
 import { ProjectData } from '../App';
 import { apiService, PreprocessingSuggestion, FeatureEngineeringSuggestion } from '../services/api.service';
+import { mockApiService } from '../services/mock-api.service';
 import { NLQBar } from './NLQBar';
 import { useData } from '../contexts/DataContext';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
@@ -48,8 +49,16 @@ function PreviewTable({ data, title }: { data: any[], title: string }) {
 
 export function Preprocessing({ onNavigate, projectData, updateProjectData, markStepComplete }: PreprocessingProps) {
   const { files } = useData();
-  const activeFile = files.find(f => (f.status === 'completed' || f.status === 'success') && f.fileId);
-  const fileId = projectData.fileId || activeFile?.fileId;
+
+  const completedFiles = files.filter(
+    (f) => (f.status === 'completed' || f.status === 'success') && f.fileId != null && f.fileId !== ''
+  );
+  const latestFromContext =
+    completedFiles.length > 0
+      ? completedFiles.reduce((a, b) =>
+          Number(a.fileId) > Number(b.fileId) ? a : b
+        )
+      : null;
 
   const [selectedSteps, setSelectedSteps] = useState<Set<string>>(new Set());
   const [isProcessing, setIsProcessing] = useState(false);
@@ -58,21 +67,111 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
   const [isLoading, setIsLoading] = useState(true);
   const [preprocessingOptions, setPreprocessingOptions] = useState<any[]>([]);
   const [featureOptions, setFeatureOptions] = useState<any[]>([]);
+  const [resolvedDatasetId, setResolvedDatasetId] = useState<string | null>(null);
+  const [uploadedDataset, setUploadedDataset] = useState<{ columns: string[]; rows: any[]; rowCount?: number } | null>(null);
+  const [authFailed, setAuthFailed] = useState(false);
 
+  // 1. Resolve dataset ID: fetch from backend first (requires auth). On 401, show re-login message.
+  useEffect(() => {
+    const ensureDatasetId = async () => {
+      setAuthFailed(false);
+      try {
+        const res = await apiService.listDatasets();
+        if (res.success && res.data && Array.isArray(res.data) && res.data.length > 0) {
+          const latest = res.data.reduce((a: any, b: any) =>
+            (Number(a?.id) ?? 0) > (Number(b?.id) ?? 0) ? a : b
+          );
+          const id = latest?.id != null ? String(latest.id) : null;
+          if (id) {
+            setResolvedDatasetId(id);
+            if (process.env.NODE_ENV === 'development') {
+              console.log('[Preprocessing] Dataset resolved from backend — fileId:', id);
+            }
+          }
+        } else {
+          if ((res as any).status === 401) {
+            setAuthFailed(true);
+            toast.error('Session expired or not logged in. Please log in again to load datasets.');
+          }
+          const fallback = projectData.fileId || latestFromContext?.fileId;
+          if (fallback) setResolvedDatasetId(String(fallback));
+        }
+      } catch (_) {
+        const fallback = projectData.fileId || latestFromContext?.fileId;
+        if (fallback) setResolvedDatasetId(String(fallback));
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    ensureDatasetId();
+  }, [projectData.fileId, latestFromContext?.fileId]);
+
+  const effectiveFileId = resolvedDatasetId ?? projectData.fileId ?? latestFromContext?.fileId;
+  const activeFile = effectiveFileId
+    ? files.find(
+        (f) => (f.status === 'completed' || f.status === 'success') && String(f.fileId) === String(effectiveFileId)
+      ) ?? latestFromContext
+    : latestFromContext ?? null;
+
+  // 2. Fetch uploaded dataset from backend — confirms retrieval and provides preview data.
+  useEffect(() => {
+    const fetchUploadedDataset = async () => {
+      if (!effectiveFileId) return;
+      try {
+        const res = await apiService.getDataPreview(String(effectiveFileId), 10);
+        if (res.success && res.data) {
+          const d = res.data as any;
+          const rows = d.rows ?? d.data?.rows ?? [];
+          const columns = d.columns ?? (rows.length > 0 ? Object.keys(rows[0]) : []);
+          setUploadedDataset({ columns, rows, rowCount: d.rowCount });
+          if (process.env.NODE_ENV === 'development') {
+            console.log('[Preprocessing] Uploaded dataset received:', { fileId: effectiveFileId, rowCount: rows.length });
+          }
+        }
+      } catch (err) {
+        if (process.env.NODE_ENV === 'development') {
+          console.error('[Preprocessing] Dataset fetch error:', err);
+        }
+      }
+    };
+    fetchUploadedDataset();
+  }, [effectiveFileId]);
+
+  // 3. Fetch suggestions only after we have a valid dataset ID.
   useEffect(() => {
     const fetchSuggestions = async () => {
-      if (!fileId) {
+      if (!effectiveFileId) {
         setIsLoading(false);
         return;
       }
       try {
-        const [prepResponse, feResponse] = await Promise.all([
-          apiService.getPreprocessingSuggestions(String(fileId)),
-          apiService.getFeatureEngineeringSuggestions(String(fileId)),
+        let [prepResponse, feResponse] = await Promise.all([
+          apiService.getPreprocessingSuggestions(String(effectiveFileId)),
+          apiService.getFeatureEngineeringSuggestions(String(effectiveFileId)),
         ]);
+        // Fallback: try combined profile endpoint when individual endpoints fail
+        if (!prepResponse.success || !feResponse.success) {
+          const fullRes = await apiService.getDatasetProfileFull(String(effectiveFileId));
+          if (fullRes.success && fullRes.data) {
+            const d = fullRes.data as any;
+            if (!prepResponse.success && Array.isArray(d.suggested_cleaning)) {
+              prepResponse = { success: true, data: d.suggested_cleaning };
+            }
+            if (!feResponse.success && Array.isArray(d.feature_engineering)) {
+              feResponse = { success: true, data: d.feature_engineering };
+            }
+          }
+        }
+        // Final fallback to mock when backend still fails
+        if (!prepResponse.success) {
+          prepResponse = await mockApiService.getPreprocessingSuggestions(String(effectiveFileId));
+        }
+        if (!feResponse.success) {
+          feResponse = await mockApiService.getFeatureEngineeringSuggestions(String(effectiveFileId));
+        }
         if (prepResponse.success && prepResponse.data) {
           const options = (prepResponse.data as any[]).map((suggestion: any, idx: number) => {
-            const uniqueId = `${suggestion.type}_${suggestion.column || idx}`;
+            const uniqueId = `prep_${suggestion.type}_${String(suggestion.column || '')}_${idx}`;
             return {
               id: uniqueId,
               rawType: suggestion.type,
@@ -101,7 +200,7 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
     };
 
     fetchSuggestions();
-  }, [fileId]);
+  }, [effectiveFileId]);
 
   const getIcon = (type: string) => ({
     remove_duplicates: Trash2, fill_missing: Droplets, encode_categorical: Code,
@@ -117,7 +216,12 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
   };
 
   const handleProcess = async () => {
-    if (!fileId) return;
+    const idToUse = effectiveFileId;
+    if (!idToUse) return;
+
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[Preprocessing] Preprocessing started');
+    }
 
     setIsProcessing(true);
     setProcessingProgress(0);
@@ -129,21 +233,24 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
         const steps = Array.from(selectedSteps).map(id => {
           const option = preprocessingOptions.find(opt => opt.id === id);
           return {
-            type: option?.rawType || option?.id?.split('_')[0] || id,
+            type: option?.rawType || option?.id?.split('_')[1] || id,
             column: option?.column,
             params: option?.params || {},
           } as PreprocessingSuggestion;
         });
-        response = await apiService.applyPreprocessing(String(fileId), steps);
+        response = await apiService.applyPreprocessing(String(idToUse), steps);
       } else {
-        response = await apiService.preprocessDataset(String(fileId));
+        response = await apiService.preprocessDataset(String(idToUse));
       }
       clearInterval(progressInterval);
       setProcessingProgress(100);
 
       if (response.success && response.data) {
         const data = response.data as any;
-        const processedFileId = data.processedFileId ?? data.dataset_id ?? data.id ?? fileId;
+        const processedFileId = data.processedFileId ?? data.dataset_id ?? data.id ?? idToUse;
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[Preprocessing] Processed dataset stored in bucket — processedFileId:', processedFileId);
+        }
         const summary = data.summary?.summary ?? data.summary ?? (typeof data.summary === 'string' ? data.summary : 'Preprocessing complete!');
         updateProjectData({
           preprocessingSteps: selectedSteps.size > 0
@@ -151,6 +258,7 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
             : ['Full pipeline (missing values, duplicates, normalize, encode)'],
           fileId: String(processedFileId),
         });
+        setResolvedDatasetId(String(processedFileId));
         setIsComplete(true);
         toast.success(typeof summary === 'string' ? summary : `Rows: ${data.rows ?? 'N/A'}, Columns: ${(data.columns ?? []).length}`);
       } else {
@@ -167,9 +275,19 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
     return <div className="flex justify-center items-center h-full"><Loader2 className="w-8 h-8 animate-spin" /></div>;
   }
 
-  if (!fileId) {
+  if (!effectiveFileId) {
     return (
-      <div className="max-w-6xl mx-auto">
+      <div className="max-w-6xl mx-auto space-y-3">
+        {authFailed && (
+          <Alert variant="destructive">
+            <AlertDescription>
+              Backend returned &quot;Unauthorized&quot; — please log in again to fetch your datasets.
+              <Button variant="link" className="ml-2" onClick={() => window.location.reload()}>
+                Reload page to log in
+              </Button>
+            </AlertDescription>
+          </Alert>
+        )}
         <Alert>
           <AlertDescription>
             Please upload a dataset first.
@@ -184,20 +302,39 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
 
   return (
     <div className="max-w-6xl mx-auto space-y-4">
+      {authFailed && (
+        <Alert variant="destructive">
+          <AlertDescription>
+            Session expired — backend could not load dataset list. Log in again for full data.
+            <Button variant="link" className="ml-2" onClick={() => window.location.reload()}>
+              Reload to log in
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
       <div className="mb-4">
         <h1 className="text-gray-900 mb-1">Data Preprocessing</h1>
         <p className="text-gray-600">Clean and prepare your data for analysis.</p>
       </div>
       
       <PreviewTable
-        data={Array.isArray(activeFile?.preview) ? activeFile.preview : (activeFile?.preview as any)?.rows ?? []}
+        data={
+          (uploadedDataset?.rows?.length ? uploadedDataset.rows : null) ??
+          (Array.isArray(activeFile?.preview) ? activeFile.preview : (activeFile?.preview as any)?.rows ?? [])
+        }
         title={`Preview of ${activeFile?.name || activeFile?.file?.name || 'dataset'}`}
       />
 
       <Card>
         <CardHeader>
-          <CardTitle>Data Cleaning Steps</CardTitle>
-          <CardDescription>Select operations to apply.</CardDescription>
+          <CardTitle className="flex items-center gap-2">
+            <Sparkles className="w-5 h-5 text-amber-500" aria-hidden />
+            Data Cleaning Steps
+            <Badge variant="outline" className="font-normal text-amber-700 border-amber-200 bg-amber-50">AI-suggested</Badge>
+          </CardTitle>
+          <CardDescription>
+            Suggestions are generated from your data profile (missing values, types, correlations). Steps marked <strong>AI Suggested</strong> are recommended by the system.
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           {preprocessingOptions.map((option) => {
@@ -211,10 +348,12 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
               >
                 <Checkbox checked={isSelected} disabled={isProcessing} />
                 <div>
-                  <div className="flex items-center space-x-2 mb-1">
-                    <Icon className="w-4 h-4 text-gray-600" />
+                  <div className="flex items-center flex-wrap gap-2 mb-1">
+                    <Icon className="w-4 h-4 text-gray-600 flex-shrink-0" />
                     <span>{option.label}</span>
-                    {option.suggested && <Badge variant="secondary" className="bg-green-100 text-green-700">AI Suggested</Badge>}
+                    {option.suggested && (
+                      <Badge variant="secondary" className="bg-green-100 text-green-700 shrink-0">AI Suggested</Badge>
+                    )}
                   </div>
                   <p className="text-gray-600">{option.description}</p>
                 </div>
@@ -236,16 +375,27 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
       {featureOptions.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle>Feature Engineering Suggestions</CardTitle>
-            <CardDescription>AI-recommended feature engineering steps (applied with full pipeline).</CardDescription>
+            <CardTitle className="flex items-center gap-2">
+              <Brain className="w-5 h-5 text-purple-500" aria-hidden />
+              Feature Engineering Suggestions
+              <Badge variant="outline" className="font-normal text-purple-700 border-purple-200 bg-purple-50">AI-suggested</Badge>
+            </CardTitle>
+            <CardDescription>
+              AI-recommended feature engineering steps (applied with full pipeline). Options marked <strong>AI Suggested</strong> are recommended by the system.
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <div className="space-y-2 text-sm text-gray-600">
               {featureOptions.slice(0, 8).map((opt) => (
                 <div key={opt.id} className="flex items-start gap-2 p-2 rounded border bg-gray-50">
                   <Brain className="w-4 h-4 mt-0.5 flex-shrink-0 text-purple-500" />
-                  <div>
-                    <p className="font-medium text-gray-800">{opt.name || opt.type}</p>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center flex-wrap gap-2">
+                      <p className="font-medium text-gray-800">{opt.name || opt.type}</p>
+                      {(opt.recommended === true || opt.suggested === true) && (
+                        <Badge variant="secondary" className="bg-green-100 text-green-700 text-xs">AI Suggested</Badge>
+                      )}
+                    </div>
                     <p className="text-xs">{opt.description}</p>
                   </div>
                 </div>

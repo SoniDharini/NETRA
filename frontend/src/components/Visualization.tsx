@@ -1,15 +1,10 @@
 import { useState, useEffect } from 'react';
 import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
-<<<<<<< Updated upstream
-import { toast } from 'sonner@2.0.3';
-import { Layout, MessageSquare, Settings } from 'lucide-react';
-=======
 import { toast } from 'sonner';
 import { Layout, MessageSquare, Settings, Loader2, Plus, Trash2, Edit2, BarChart3 } from 'lucide-react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import Papa from 'papaparse';
->>>>>>> Stashed changes
 import { ProjectData } from '../App';
 import { Alert, AlertDescription } from './ui/alert';
 import { Button } from './ui/button';
@@ -26,6 +21,7 @@ import { QuickStartGuide } from './visualization/QuickStartGuide';
 import { SuggestionsPanel } from './visualization/SuggestionsPanel';
 import { apiService, VisualizationSuggestion } from '../services/api.service';
 import { sampleDataService } from '../services/sample-data.service';
+import { useData } from '../contexts/DataContext';
 
 interface VisualizationProps {
   onNavigate: (section: any) => void;
@@ -39,6 +35,7 @@ export interface FieldItem {
   name: string;
   type: 'dimension' | 'measure';
   dataType: 'string' | 'number' | 'date';
+  aggregation?: 'sum' | 'mean' | 'count' | 'min' | 'max' | null;
 }
 
 export interface ChartConfig {
@@ -57,6 +54,10 @@ interface SavedVisualization {
 }
 
 export function Visualization({ onNavigate, projectData, updateProjectData, markStepComplete }: VisualizationProps) {
+  const { files } = useData();
+  const activeFile = files.find(f => (f.status === 'completed' || f.status === 'success') && f.fileId);
+  const fileId = projectData.fileId || activeFile?.fileId;
+
   // State
   const [fields, setFields] = useState<FieldItem[]>([]);
   const [chartConfig, setChartConfig] = useState<ChartConfig>({
@@ -64,9 +65,11 @@ export function Visualization({ onNavigate, projectData, updateProjectData, mark
     rows: [],
   });
   const [chartType, setChartType] = useState<string>('bar');
-  const [chartData, setChartData] = useState<any[]>([]);
+  const [canvasVisuals, setCanvasVisuals] = useState<any[]>([]);
+  const [fullDataset, setFullDataset] = useState<any[]>([]);
   const [savedVisualizations, setSavedVisualizations] = useState<SavedVisualization[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isDataLoading, setIsDataLoading] = useState(false);
   const [formatConfig, setFormatConfig] = useState<FormatConfig>({
     colorScheme: 'default',
     fontSize: 12,
@@ -88,41 +91,15 @@ export function Visualization({ onNavigate, projectData, updateProjectData, mark
   const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
   const [lastAppliedSuggestion, setLastAppliedSuggestion] = useState<any>(null);
   const [chartData, setChartData] = useState<{ histogram: any; bar_chart: any; correlation: any } | null>(null);
-  const [isLoadingCharts, setIsLoadingCharts] = useState(false);
 
-  // Initialize fields from the dataset
+  // Initialize: Load full dataset and fetch suggestions
   useEffect(() => {
-<<<<<<< Updated upstream
-    if (projectData.dataPreview && projectData.dataPreview.length > 0) {
-      const sampleRow = projectData.dataPreview[0];
-      const detectedFields: FieldItem[] = Object.keys(sampleRow).map((key) => {
-        const value = sampleRow[key];
-        const isNumber = typeof value === 'number' || !isNaN(Number(value));
-        const isDate = !isNumber && !isNaN(Date.parse(value));
-        
-        return {
-          name: key,
-          type: isNumber ? 'measure' : 'dimension',
-          dataType: isDate ? 'date' : isNumber ? 'number' : 'string',
-        };
-      });
-      
-      setFields(detectedFields);
-      
-      // Fetch AI suggestions
-      fetchAiSuggestions();
-    } else {
-      // Mock data for demonstration
-      generateMockFields();
-      // Also fetch suggestions for mock data
-      fetchAiSuggestions();
-=======
     const initializeVisualization = async () => {
-      if (projectData.fileId) {
+      if (fileId) {
         setIsDataLoading(true);
         try {
           // 1. Fetch Full Dataset via dedicated endpoint (returns blob)
-          const blobResponse = await apiService.downloadPreprocessedDataset(projectData.fileId);
+          const blobResponse = await apiService.downloadPreprocessedDataset(String(fileId));
 
           if (blobResponse.success && blobResponse.data) {
             // Convert Blob to Text first ensures robust parsing
@@ -156,7 +133,7 @@ export function Visualization({ onNavigate, projectData, updateProjectData, mark
                   setFields(detectedFields);
 
                   // 2. Fetch AI Suggestions (after we have data/fields)
-                  fetchAiSuggestions(detectedFields);
+                  fetchAiSuggestions(detectedFields as FieldItem[]);
                 }
                 setIsDataLoading(false);
               },
@@ -176,7 +153,7 @@ export function Visualization({ onNavigate, projectData, updateProjectData, mark
           fetchSavedVisualizations();
 
           // 4. Fetch chart data for histogram, bar, correlation
-          const vizRes = await apiService.getVisualizationData(projectData.fileId);
+          const vizRes = await apiService.getVisualizationData(String(fileId));
           if (vizRes.success && vizRes.data) {
             setChartData(vizRes.data);
           }
@@ -193,12 +170,12 @@ export function Visualization({ onNavigate, projectData, updateProjectData, mark
     };
 
     initializeVisualization();
-  }, [projectData.fileId]);
+  }, [fileId]);
 
   const fetchSavedVisualizations = async () => {
-    if (!projectData.fileId) return;
+    if (!fileId) return;
     try {
-      const response = await apiService.getSavedVisualizations(projectData.fileId);
+      const response = await apiService.getSavedVisualizations(String(fileId));
       if (response.success && response.data) {
         const saved = response.data.map((v: any) => ({
           id: v.id,
@@ -211,29 +188,37 @@ export function Visualization({ onNavigate, projectData, updateProjectData, mark
       }
     } catch (error) {
       console.error("Failed to load saved visualizations", error);
->>>>>>> Stashed changes
     }
-  }, [projectData.dataPreview]);
+  };
 
-  const fetchAiSuggestions = async () => {
+  const fetchAiSuggestions = async (currentFields?: FieldItem[]) => {
     setIsLoadingSuggestions(true);
     try {
       const response = await apiService.getVisualizationSuggestions(
-        projectData.fileId || 'mock-file-id'
+        fileId ? String(fileId) : 'mock-file-id'
       );
       
       if (response.success && response.data) {
-        // Transform suggestions to include IDs and full config
-        const transformedSuggestions = response.data.map((s, idx) => ({
-          id: `suggestion-${idx}`,
-          ...s,
-          config: {
-            columns: s.columns || [],
-            rows: s.rows || [],
-            color: s.color,
-            size: s.size,
-          },
-        }));
+        // Transform backend format (data_mapping, chart_type) to frontend format (config.columns/rows, type)
+        const transformedSuggestions = response.data.map((s: any, idx: number) => {
+          const dm = s.data_mapping || {};
+          const columns = s.columns ?? (dm.x ? [dm.x] : []);
+          const rows = s.rows ?? (dm.y && dm.y !== 'count' ? [dm.y] : dm.x ? [dm.x] : []);
+          return {
+            id: `suggestion-${idx}`,
+            type: s.chart_type || s.type || 'bar',
+            title: s.title || '',
+            description: s.description || '',
+            reason: s.reason || '',
+            recommended: s.recommended ?? false,
+            config: {
+              columns: Array.isArray(columns) ? columns : [columns].filter(Boolean),
+              rows: Array.isArray(rows) ? rows : [rows].filter(Boolean),
+              color: s.color || dm.color,
+              size: s.size || dm.size,
+            },
+          };
+        });
         setAiSuggestions(transformedSuggestions as any);
       }
     } catch (error) {
@@ -243,12 +228,80 @@ export function Visualization({ onNavigate, projectData, updateProjectData, mark
     }
   };
 
-  // Generate chart data when config changes
-  useEffect(() => {
-    if (chartConfig.columns.length > 0 || chartConfig.rows.length > 0) {
-      generateChartData();
+  const getProcessedData = (dataset: any[], config: ChartConfig, type: string) => {
+    if (!dataset || dataset.length === 0) return [];
+    if (!config.columns.length && !config.rows.length) return [];
+    const xField = config.columns[0];
+    const yFields = config.rows;
+
+    // Histogram: group by x, count (no measure needed). Limit to top 20 bins for readability.
+    if (type === 'histogram' && xField) {
+      const groups: Record<string, number> = {};
+      dataset.forEach((row: any) => {
+        const key = String(row[xField.name] ?? 'Unknown');
+        groups[key] = (groups[key] || 0) + 1;
+      });
+      const entries = Object.entries(groups)
+        .map(([name, count]) => ({ [xField.name]: name, count, name }))
+        .sort((a, b) => (b.count as number) - (a.count as number))
+        .slice(0, 20);
+      return entries;
     }
-  }, [chartConfig, projectData.dataPreview]);
+
+    if (type === 'scatter' && xField && yFields[0]) {
+      return dataset.filter(row => row[xField.name] != null && row[yFields[0].name] != null);
+    }
+    if (type === 'pie' && xField) {
+      const groups: Record<string, number> = {};
+      const measureField = yFields[0];
+      dataset.forEach(row => {
+        const key = String(row[xField.name] || 'Unknown');
+        groups[key] = (groups[key] || 0) + (measureField ? Number(row[measureField.name]) || 0 : 1);
+      });
+      return Object.entries(groups).map(([name, value]) => ({ name, value, [xField.name]: name }));
+    }
+    if (xField) {
+      const groupedData: Record<string, any> = {};
+      dataset.forEach((row: any) => {
+        const groupKey = String(row[xField.name] ?? 'Unknown');
+        if (!groupedData[groupKey]) {
+          groupedData[groupKey] = { [xField.name]: row[xField.name], _count: 0, _sums: {} as any, _values: {} as any };
+          yFields.forEach(yf => { groupedData[groupKey]._sums[yf.name] = 0; groupedData[groupKey]._values[yf.name] = []; });
+        }
+        groupedData[groupKey]._count++;
+        yFields.forEach(yf => {
+          const val = Number(row[yf.name]);
+          if (!isNaN(val)) {
+            groupedData[groupKey]._sums[yf.name] += val;
+            groupedData[groupKey]._values[yf.name].push(val);
+          }
+        });
+      });
+      return Object.values(groupedData).map((g: any) => {
+        const result: any = { [xField.name]: g[xField.name] };
+        yFields.forEach(yf => {
+          result[yf.name] = yf.aggregation === 'mean' && g._values[yf.name]?.length
+            ? g._values[yf.name].reduce((a: number, b: number) => a + b, 0) / g._values[yf.name].length
+            : g._sums[yf.name] || 0;
+        });
+        return result;
+      });
+    }
+    return dataset.slice(0, 100);
+  };
+
+  const handleEditVisual = (viz: any, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setChartConfig(viz.config);
+    setChartType(viz.type);
+    setActiveMode('worksheet');
+    toast.info(`Editing: ${viz.title}`);
+  };
+
+  const handleDeleteVisual = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setCanvasVisuals(prev => prev.filter(v => v.id !== id));
+  };
 
   const generateMockFields = () => {
     // Use sample data service to generate realistic data
@@ -269,45 +322,7 @@ export function Visualization({ onNavigate, projectData, updateProjectData, mark
       });
       
       setFields(detectedFields);
-      
-      // Also set the sample data as preview data
-      updateProjectData({ dataPreview: sampleData.rows });
-    }
-  };
-
-  const generateChartData = () => {
-    // Use project data if available
-    if (projectData.dataPreview && projectData.dataPreview.length > 0) {
-      // Filter and format data based on config
-      const relevantFields = [
-        ...chartConfig.columns.map(f => f.name),
-        ...chartConfig.rows.map(f => f.name),
-        chartConfig.color?.name,
-        chartConfig.size?.name,
-      ].filter(Boolean);
-
-      const formattedData = projectData.dataPreview.map(row => {
-        const newRow: any = {};
-        relevantFields.forEach(field => {
-          if (field && row[field] !== undefined) {
-            newRow[field] = row[field];
-          }
-        });
-        return newRow;
-      });
-
-      setChartData(formattedData);
-    } else {
-      // Generate mock data for demonstration
-      generateMockChartData();
-    }
-  };
-
-  const generateMockChartData = () => {
-    // Use sample data from the service
-    const sampleData = sampleDataService.getSampleDataset('sales', 50);
-    if (sampleData) {
-      setChartData(sampleData.rows);
+      setFullDataset(sampleData.rows);
     }
   };
 
@@ -315,22 +330,36 @@ export function Visualization({ onNavigate, projectData, updateProjectData, mark
     setChartConfig(prev => ({ ...prev, ...updates }));
   };
 
-  const handleSaveVisualization = () => {
+  const handleSaveVisualization = async () => {
     if (chartConfig.columns.length === 0 && chartConfig.rows.length === 0) {
       toast.error('Please add fields to the chart before saving');
       return;
     }
-
-    const newViz: SavedVisualization = {
-      id: `viz-${Date.now()}`,
-      name: `${chartType.charAt(0).toUpperCase() + chartType.slice(1)} Chart ${savedVisualizations.length + 1}`,
-      config: { ...chartConfig },
-      chartType,
-      timestamp: new Date(),
-    };
-
-    setSavedVisualizations(prev => [...prev, newViz]);
-    toast.success('Visualization saved!');
+    if (fileId) {
+      try {
+        await apiService.saveVisualization(
+          String(fileId),
+          `${chartType.charAt(0).toUpperCase() + chartType.slice(1)} Chart ${savedVisualizations.length + 1}`,
+          chartType,
+          chartConfig,
+          false
+        );
+        toast.success('Visualization saved!');
+        fetchSavedVisualizations();
+      } catch (e) {
+        toast.error('Failed to save visualization');
+      }
+    } else {
+      const newViz: SavedVisualization = {
+        id: `viz-${Date.now()}`,
+        name: `${chartType.charAt(0).toUpperCase() + chartType.slice(1)} Chart ${savedVisualizations.length + 1}`,
+        config: { ...chartConfig },
+        chartType,
+        timestamp: new Date(),
+      };
+      setSavedVisualizations(prev => [...prev, newViz]);
+      toast.success('Visualization saved!');
+    }
   };
 
   const handleExportChart = () => {
@@ -376,21 +405,24 @@ export function Visualization({ onNavigate, projectData, updateProjectData, mark
   };
 
   const handleSelectSuggestion = (suggestion: any) => {
-    // Find fields and configure chart based on suggestion
-    const columnsFields = suggestion.config.columns
-      .map((colName: string) => fields.find(f => f.name === colName))
-      .filter(Boolean) as FieldItem[];
-    
-    const rowsFields = suggestion.config.rows
-      .map((rowName: string) => fields.find(f => f.name === rowName))
-      .filter(Boolean) as FieldItem[];
+    // Helper: resolve field by name, or create synthetic FieldItem if not found (handles backend column name mismatches)
+    const resolveField = (name: string, asMeasure = false): FieldItem => {
+      const found = fields.find(f => f.name === name);
+      if (found) return found;
+      return { name, type: asMeasure ? 'measure' : 'dimension', dataType: 'string' };
+    };
 
-    const colorField = suggestion.config.color
-      ? fields.find(f => f.name === suggestion.config.color)
+    const colNames = suggestion.config?.columns || [];
+    const rowNames = suggestion.config?.rows || [];
+    const columnsFields = colNames.map((colName: string) => resolveField(colName, false));
+    const rowsFields = rowNames.map((rowName: string) => resolveField(rowName, true));
+
+    const colorField = suggestion.config?.color
+      ? (fields.find(f => f.name === suggestion.config.color) ?? resolveField(suggestion.config.color))
       : undefined;
 
-    const sizeField = suggestion.config.size
-      ? fields.find(f => f.name === suggestion.config.size)
+    const sizeField = suggestion.config?.size
+      ? (fields.find(f => f.name === suggestion.config.size) ?? resolveField(suggestion.config.size))
       : undefined;
 
     // Update configuration
@@ -402,17 +434,19 @@ export function Visualization({ onNavigate, projectData, updateProjectData, mark
     });
 
     // Set chart type
-    setChartType(suggestion.type);
+    setChartType(suggestion.type || 'bar');
 
     // Store the applied suggestion
     setLastAppliedSuggestion(suggestion);
 
+    // Dismiss suggestions panel so user can see the chart
+    setShowSuggestions(false);
+
     // Switch to worksheet mode to show the result
     setActiveMode('worksheet');
 
-    // Show success message
     toast.success(`Applied: ${suggestion.title}`, {
-      description: 'You can change the chart type or modify the configuration',
+      description: 'Chart rendered in canvas. You can change the chart type or modify the configuration.',
     });
   };
 
@@ -426,8 +460,8 @@ export function Visualization({ onNavigate, projectData, updateProjectData, mark
     onNavigate(section);
   };
 
-  // Check prerequisites
-  if (!projectData.modelMetrics && !projectData.dataPreview) {
+  // Check prerequisites - allow if we have fileId (from project or context) or dataPreview
+  if (!fileId && !projectData.dataPreview) {
     return (
       <div className="max-w-6xl mx-auto">
         <Alert>
@@ -533,17 +567,7 @@ export function Visualization({ onNavigate, projectData, updateProjectData, mark
               </>
             )}
 
-<<<<<<< Updated upstream
             {/* Canvas Area */}
-            <div className="flex-1 p-4 overflow-auto bg-gray-50 min-h-0">
-              <ChartCanvas
-                config={chartConfig}
-                chartType={chartType}
-                data={chartData}
-                onExport={handleExportChart}
-              />
-=======
-            {/* Canvas Area - Renders ALL Loop */}
             <div className="flex-1 p-6 overflow-auto bg-gray-50 min-h-0">
               {/* 1. Render the 'Active' Worksheet visual being built/edited */}
               {/* Separated from the list for clarity, or added to list? 
@@ -552,13 +576,20 @@ export function Visualization({ onNavigate, projectData, updateProjectData, mark
                 */}
 
               {activeMode === 'worksheet' && (chartConfig.columns.length > 0 || chartConfig.rows.length > 0) && (
-                <div className="mb-8 border-b-2 border-dashed border-gray-300 pb-8">
+                <div className="mb-8 border-b-2 border-dashed border-gray-300 pb-8" data-testid="worksheet-scratchpad">
                   <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-4">Worksheet Scratchpad</h3>
                   <div className="bg-white p-4 rounded-lg shadow-sm border h-96 flex flex-col">
                     <ChartCanvas
+                      key={`canvas-${chartType}-${chartConfig.columns.length}-${chartConfig.rows.length}`}
                       config={chartConfig}
                       chartType={chartType}
-                      data={getProcessedData(fullDataset, chartConfig, chartType)}
+                      data={(() => {
+                        const d = getProcessedData(fullDataset, chartConfig, chartType);
+                        if (process.env.NODE_ENV === 'development' && fullDataset?.length > 0 && d.length === 0) {
+                          console.warn('[Visualization] getProcessedData returned empty. Dataset rows:', fullDataset.length, 'config:', { columns: chartConfig.columns.map(c => c.name), rows: chartConfig.rows.map(r => r.name), type: chartType });
+                        }
+                        return d;
+                      })()}
                       onExport={() => { }}
                     />
                     <div className="mt-2 flex justify-end">
@@ -568,7 +599,7 @@ export function Visualization({ onNavigate, projectData, updateProjectData, mark
                           type: chartType,
                           config: chartConfig,
                           title: "New Chart",
-                          dataset_id: projectData.fileId
+                          dataset_id: fileId
                         }]);
                         toast.success("Added to Canvas");
                       }}>
@@ -681,7 +712,6 @@ export function Visualization({ onNavigate, projectData, updateProjectData, mark
                   ))}
                 </div>
               )}
->>>>>>> Stashed changes
             </div>
           </div>
 

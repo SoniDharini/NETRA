@@ -1,10 +1,5 @@
 from rest_framework import viewsets, status
 from rest_framework.response import Response
-<<<<<<< Updated upstream
-from rest_framework.permissions import IsAuthenticated
-from .models import Dataset
-from .serializers import DatasetSerializer
-=======
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
@@ -13,13 +8,22 @@ from django.http import HttpResponse, FileResponse
 from django.conf import settings
 from .models import Dataset, Visualization
 from .serializers import DatasetSerializer, VisualizationSerializer
-from .preprocessing_service import preprocessing_service
-from .visualization_service import visualization_service
 import pandas as pd
+
+# Lazy imports: defer sklearn/pandas/scipy loading until first dataset request.
+# Prevents blocking server startup and admin panel (admin never needs these).
+def _get_preprocessing_service():
+    from .preprocessing_service import preprocessing_service
+    return preprocessing_service
+
+def _get_visualization_service():
+    from .visualization_service import visualization_service
+    return visualization_service
 import numpy as np
 import os
 import logging
 import traceback
+
 
 def clean_for_json(obj):
     if isinstance(obj, dict):
@@ -33,9 +37,6 @@ def clean_for_json(obj):
     elif pd.isna(obj):
         return None
     return obj
-
->>>>>>> Stashed changes
-import pandas as pd
 
 
 class JsonUploadView(APIView):
@@ -76,11 +77,27 @@ class JsonUploadView(APIView):
                 }
             }, status=status.HTTP_201_CREATED)
 
-<<<<<<< Updated upstream
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-=======
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+logger = logging.getLogger(__name__)
+
+
+def _resolve_dataset_file_path(dataset):
+    """Resolve the absolute path to the dataset file, with fallback for legacy storage."""
+    try:
+        path = dataset.file.path
+        if path and os.path.exists(path):
+            return path
+    except (ValueError, AttributeError):
+        pass
+    # Fallback: MEDIA_ROOT + file.name (for correct path resolution)
+    if hasattr(settings, 'MEDIA_ROOT') and settings.MEDIA_ROOT and dataset.file.name:
+        fallback = os.path.join(str(settings.MEDIA_ROOT), dataset.file.name)
+        if os.path.exists(fallback):
+            return fallback
+    return None
 
 
 @api_view(['POST'])
@@ -99,6 +116,7 @@ def upload_dataset(request):
         return Response({'error': 'Unsupported format. Use CSV, JSON, or XLSX.'}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
+        logger.info("Upload started: %s (user=%s)", uploaded_file.name, request.user.id)
         dataset = Dataset(user=request.user, name=request.data.get('name', uploaded_file.name), metadata={})
         dataset.file.save(uploaded_file.name, uploaded_file, save=True)
 
@@ -121,6 +139,7 @@ def upload_dataset(request):
         dataset.metadata['columnCount'] = len(df.columns)
         dataset.save()
 
+        logger.info("Upload success: dataset_id=%s, rows=%s", dataset.id, dataset.rows)
         return Response({
             'id': str(dataset.id),
             'dataset_id': dataset.id,
@@ -129,7 +148,7 @@ def upload_dataset(request):
             'metadata': dataset.metadata,
         }, status=status.HTTP_201_CREATED)
     except Exception as e:
-        logging.error(f"Upload failed: {e}")
+        logger.error("Upload failed: %s", e)
         traceback.print_exc()
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -200,12 +219,10 @@ def get_data_preview(request):
                 logging.error(f"Dataset {file_id} has no file associated with it.")
                 return Response({'success': False, 'error': 'No file associated with this dataset.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-            file_path = dataset.file.path
-            logging.info(f"Dataset file path: {file_path}")
-            
-            if not os.path.exists(file_path):
-                logging.error(f"File not found at path: {file_path}")
-                return Response({'success': False, 'error': f'File not found at path: {file_path}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            file_path = _resolve_dataset_file_path(dataset)
+            if not file_path:
+                logging.error(f"File not found for dataset {file_id}")
+                return Response({'success': False, 'error': 'Dataset file not found on disk'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             
             logging.info(f"File exists at path: {os.path.exists(file_path)}")
 
@@ -218,7 +235,7 @@ def get_data_preview(request):
         
         # Load dataset
         try:
-            df = preprocessing_service.load_dataset(file_path)
+            df = _get_preprocessing_service().load_dataset(file_path)
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -270,25 +287,62 @@ def get_data_preview(request):
 def get_data_profile(request):
     """Profile the FULL dataset - returns statistics on complete data"""
     file_id = request.data.get('fileId')
-    
     if not file_id:
         return Response({'error': 'fileId is required'}, status=status.HTTP_400_BAD_REQUEST)
-    
     try:
         dataset = Dataset.objects.get(id=file_id, user=request.user)
-        # Load FULL dataset for profiling
-        df = preprocessing_service.load_dataset(dataset.file.path)
-        
-        # Profile the FULL dataset
-        profile = preprocessing_service.profile_dataset(df)
-        
+        file_path = _resolve_dataset_file_path(dataset)
+        if not file_path:
+            return Response({'error': 'Dataset file not found on disk'}, status=status.HTTP_404_NOT_FOUND)
+        df = _get_preprocessing_service().load_dataset(file_path)
+        profile = _get_preprocessing_service().profile_dataset(df)
+        return Response({'success': True, 'data': profile})
+    except Dataset.DoesNotExist:
+        return Response({'error': 'Dataset not found'}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def get_dataset_profile_full(request):
+    """Returns structured profile: missing_values, duplicates, suggested_cleaning, feature_engineering"""
+    file_id = request.data.get('fileId')
+    if not file_id:
+        return Response({'error': 'fileId is required'}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        dataset = Dataset.objects.get(id=file_id, user=request.user)
+        if not dataset.file:
+            return Response({'error': 'No file associated with this dataset'}, status=status.HTTP_400_BAD_REQUEST)
+        file_path = _resolve_dataset_file_path(dataset)
+        if not file_path:
+            return Response({'error': 'Dataset file not found on disk'}, status=status.HTTP_404_NOT_FOUND)
+        df = _get_preprocessing_service().load_dataset(file_path)
+        profile = _get_preprocessing_service().profile_dataset(df)
+        prep_suggestions = []
+        fe_suggestions = []
+        try:
+            prep_suggestions = _get_preprocessing_service().generate_preprocessing_suggestions(df, profile)
+        except Exception as e:
+            logger.warning("Preprocessing suggestions error: %s", e)
+        try:
+            fe_suggestions = _get_preprocessing_service().generate_feature_engineering_suggestions(df, profile)
+        except Exception as e:
+            logger.warning("Feature engineering suggestions error: %s", e)
         return Response({
             'success': True,
-            'data': profile
+            'data': clean_for_json({
+                'missing_values': profile.get('missingValues', {}),
+                'duplicates': {'count': profile.get('duplicateRows', 0)},
+                'suggested_cleaning': prep_suggestions,
+                'feature_engineering': fe_suggestions,
+            })
         })
     except Dataset.DoesNotExist:
         return Response({'error': 'Dataset not found'}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
+        logger.error("get_dataset_profile_full failed: %s", e)
+        traceback.print_exc()
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -303,14 +357,25 @@ def get_preprocessing_suggestions(request):
     
     try:
         dataset = Dataset.objects.get(id=file_id, user=request.user)
+        if not dataset.file:
+            return Response({'error': 'No file associated with this dataset'}, status=status.HTTP_400_BAD_REQUEST)
+        file_path = _resolve_dataset_file_path(dataset)
+        if not file_path:
+            return Response({'error': 'Dataset file not found on disk'}, status=status.HTTP_404_NOT_FOUND)
+
         # Load FULL dataset
-        df = preprocessing_service.load_dataset(dataset.file.path)
+        df = _get_preprocessing_service().load_dataset(file_path)
         
         # Profile FULL dataset
-        profile = preprocessing_service.profile_dataset(df)
+        profile = _get_preprocessing_service().profile_dataset(df)
         
-        # Generate suggestions based on FULL dataset
-        suggestions = preprocessing_service.generate_preprocessing_suggestions(df, profile)
+        # Generate suggestions based on FULL dataset (with fallback on service errors)
+        try:
+            suggestions = _get_preprocessing_service().generate_preprocessing_suggestions(df, profile)
+        except Exception as svc_err:
+            logger.warning("Preprocessing suggestions service error (returning empty): %s", svc_err)
+            traceback.print_exc()
+            suggestions = []
         
         return Response({
             'success': True,
@@ -319,6 +384,8 @@ def get_preprocessing_suggestions(request):
     except Dataset.DoesNotExist:
         return Response({'error': 'Dataset not found'}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
+        logger.error("get_preprocessing_suggestions failed: %s", e)
+        traceback.print_exc()
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -333,14 +400,25 @@ def get_feature_engineering_suggestions(request):
     
     try:
         dataset = Dataset.objects.get(id=file_id, user=request.user)
+        if not dataset.file:
+            return Response({'error': 'No file associated with this dataset'}, status=status.HTTP_400_BAD_REQUEST)
+        file_path = _resolve_dataset_file_path(dataset)
+        if not file_path:
+            return Response({'error': 'Dataset file not found on disk'}, status=status.HTTP_404_NOT_FOUND)
+
         # Load FULL dataset
-        df = preprocessing_service.load_dataset(dataset.file.path)
+        df = _get_preprocessing_service().load_dataset(file_path)
         
         # Profile FULL dataset
-        profile = preprocessing_service.profile_dataset(df)
+        profile = _get_preprocessing_service().profile_dataset(df)
         
-        # Generate suggestions
-        suggestions = preprocessing_service.generate_feature_engineering_suggestions(df, profile)
+        # Generate suggestions (with fallback on service errors)
+        try:
+            suggestions = _get_preprocessing_service().generate_feature_engineering_suggestions(df, profile)
+        except Exception as svc_err:
+            logger.warning("Feature engineering suggestions service error (returning empty): %s", svc_err)
+            traceback.print_exc()
+            suggestions = []
         
         return Response({
             'success': True,
@@ -349,6 +427,8 @@ def get_feature_engineering_suggestions(request):
     except Dataset.DoesNotExist:
         return Response({'error': 'Dataset not found'}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
+        logger.error("get_feature_engineering_suggestions failed: %s", e)
+        traceback.print_exc()
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -368,13 +448,21 @@ def preprocess_dataset(request, dataset_id):
         return Response({'error': 'No file associated with this dataset'}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
-        file_path = dataset.file.path
-        if not os.path.exists(file_path):
+        file_path = _resolve_dataset_file_path(dataset)
+        if not file_path:
             return Response({'error': 'Dataset file not found on disk'}, status=status.HTTP_404_NOT_FOUND)
 
-        df_processed, summary = preprocessing_service.run_full_preprocessing(file_path)
+        df_processed, summary = _get_preprocessing_service().run_full_preprocessing(file_path)
 
-        # Save to media/datasets/processed/
+        # Save to media/datasets/preprocessed/{user_id}/{dataset_id}/processed.csv
+        user_id = str(request.user.id)
+        ds_id = str(dataset.id)
+        preprocessed_dir = os.path.join(str(settings.MEDIA_ROOT), 'datasets', 'preprocessed', user_id, ds_id)
+        os.makedirs(preprocessed_dir, exist_ok=True)
+        processed_path = os.path.join(preprocessed_dir, 'processed.csv')
+        df_processed.to_csv(processed_path, index=False)
+
+        # Also save to dataset.processed_file for download lookup
         processed_filename = f"processed_{dataset.name}.csv"
         if not processed_filename.endswith('.csv'):
             processed_filename += '.csv'
@@ -386,7 +474,7 @@ def preprocess_dataset(request, dataset_id):
         dataset.preprocessing_applied = True
         dataset.metadata.update({
             'processed': True,
-            'processed_file_path': dataset.processed_file.path if dataset.processed_file else None,
+            'processed_file_path': processed_path,
             'last_processed_at': str(pd.Timestamp.now()),
             'preprocess_summary': summary,
         })
@@ -394,6 +482,7 @@ def preprocess_dataset(request, dataset_id):
 
         return Response({
             'dataset_id': dataset.id,
+            'processedFileId': dataset.id,
             'rows': dataset.rows,
             'columns': dataset.columns,
             'preprocessing_applied': True,
@@ -417,25 +506,33 @@ def apply_preprocessing(request, dataset_id=None):
         return Response({'error': 'fileId is required'}, status=status.HTTP_400_BAD_REQUEST)
     
     try:
+        logger.info("Preprocessing started: fileId=%s, steps=%s", file_id, len(steps))
         dataset = Dataset.objects.get(id=file_id, user=request.user)
+        file_path = _resolve_dataset_file_path(dataset)
+        if not file_path:
+            return Response({'error': 'Dataset file not found on disk'}, status=status.HTTP_404_NOT_FOUND)
+
         # Load FULL dataset
-        df = preprocessing_service.load_dataset(dataset.file.path)
+        df = _get_preprocessing_service().load_dataset(file_path)
         
         # Apply preprocessing
-        df_processed, summary = preprocessing_service.apply_preprocessing(df, steps)
+        df_processed, summary = _get_preprocessing_service().apply_preprocessing(df, steps)
         
-        # Define storage path
+        # Save to media/datasets/preprocessed/{user_id}/{dataset_id}/processed.csv
         user_id = str(request.user.id)
         ds_id = str(dataset.id)
-        
-        # Ensure directory exists: media/datasets/{user_id}/{dataset_id}/
-        save_dir = os.path.join(settings.MEDIA_ROOT, 'datasets', user_id, ds_id)
-        os.makedirs(save_dir, exist_ok=True)
-        
-        processed_path = os.path.join(save_dir, 'processed.csv')
-        
-        # Save processed dataset
+        preprocessed_dir = os.path.join(str(settings.MEDIA_ROOT), 'datasets', 'preprocessed', user_id, ds_id)
+        os.makedirs(preprocessed_dir, exist_ok=True)
+        processed_path = os.path.join(preprocessed_dir, 'processed.csv')
         df_processed.to_csv(processed_path, index=False)
+
+        # Also save to dataset.processed_file for consistent download lookup
+        processed_filename = f"processed_{dataset.name}.csv"
+        if not processed_filename.endswith('.csv'):
+            processed_filename += '.csv'
+        csv_buffer = df_processed.to_csv(index=False)
+        dataset.processed_file.save(processed_filename, ContentFile(csv_buffer.encode('utf-8')), save=False)
+        dataset.preprocessing_applied = True
         
         # Update metadata
         dataset.metadata.update({
@@ -451,6 +548,7 @@ def apply_preprocessing(request, dataset_id=None):
         preview_clean = preview.astype(object).where(pd.notnull(preview), None)
         preview_clean = preview_clean.replace([float('inf'), float('-inf')], None)
         
+        logger.info("Preprocessing finished: dataset_id=%s, shape=%s", dataset.id, df_processed.shape)
         return Response({
             'success': True,
             'data': {
@@ -498,7 +596,12 @@ def download_preprocessed_data(request, dataset_id=None):
         if not processed_path or not os.path.exists(processed_path):
             user_id = str(request.user.id)
             ds_id = str(dataset.id)
-            processed_path = os.path.join(settings.MEDIA_ROOT, 'datasets', user_id, ds_id, 'processed.csv')
+            # Check preprocessed folder first, then legacy path
+            processed_path = os.path.join(str(settings.MEDIA_ROOT), 'datasets', 'preprocessed', user_id, ds_id, 'processed.csv')
+        if not processed_path or not os.path.exists(processed_path):
+            user_id = str(request.user.id)
+            ds_id = str(dataset.id)
+            processed_path = os.path.join(str(settings.MEDIA_ROOT), 'datasets', user_id, ds_id, 'processed.csv')
         if not processed_path or not os.path.exists(processed_path):
             if dataset.metadata.get('processed_file_path') and os.path.exists(dataset.metadata['processed_file_path']):
                 processed_path = dataset.metadata['processed_file_path']
@@ -552,9 +655,9 @@ def profile_and_suggest_features(request, dataset_id):
         return Response({'error': 'Dataset not found or access denied'}, status=status.HTTP_404_NOT_FOUND)
 
     try:
-        df = preprocessing_service.load_dataset(file_path)
+        df = _get_preprocessing_service().load_dataset(file_path)
         
-        profile = preprocessing_service.profile_dataset(df)
+        profile = _get_preprocessing_service().profile_dataset(df)
         
         df_for_model = df.copy()
         
@@ -606,13 +709,13 @@ def profile_and_suggest_features(request, dataset_id):
 
         # robustly generate suggestions
         try:
-             fe_suggestions = preprocessing_service.generate_feature_engineering_suggestions(df, profile)
+             fe_suggestions = _get_preprocessing_service().generate_feature_engineering_suggestions(df, profile)
         except Exception as suggestion_error:
              logging.error(f"Error generating FE suggestions: {suggestion_error}")
              fe_suggestions = []
 
         try:
-             clean_suggestions = preprocessing_service.generate_preprocessing_suggestions(df, profile)
+             clean_suggestions = _get_preprocessing_service().generate_preprocessing_suggestions(df, profile)
         except Exception as clean_error:
              logging.error(f"Error generating cleaning suggestions: {clean_error}")
              clean_suggestions = []
@@ -653,14 +756,14 @@ def auto_process_dataset(request):
         dataset = Dataset.objects.get(id=dataset_id, user=request.user)
         
         # 1. Load FULL Dataset
-        df = preprocessing_service.load_dataset(dataset.file.path)
+        df = _get_preprocessing_service().load_dataset(dataset.file.path)
         
         # 2. Profile
-        profile = preprocessing_service.profile_dataset(df)
+        profile = _get_preprocessing_service().profile_dataset(df)
         
         # 3. Generate Suggestions
-        clean_suggestions = preprocessing_service.generate_preprocessing_suggestions(df, profile)
-        fe_suggestions = preprocessing_service.generate_feature_engineering_suggestions(df, profile)
+        clean_suggestions = _get_preprocessing_service().generate_preprocessing_suggestions(df, profile)
+        fe_suggestions = _get_preprocessing_service().generate_feature_engineering_suggestions(df, profile)
         
         all_suggestions = clean_suggestions + fe_suggestions
         
@@ -671,7 +774,7 @@ def auto_process_dataset(request):
         steps_to_apply = [s for s in all_suggestions if s.get('recommended', False)]
         
         # 5. Apply Steps
-        df_processed, summary = preprocessing_service.apply_preprocessing(df, steps_to_apply)
+        df_processed, summary = _get_preprocessing_service().apply_preprocessing(df, steps_to_apply)
         
         # 6. Save Processed Dataset
         processed_name = f"IDPRA_Processed_{dataset.name}"
@@ -730,18 +833,23 @@ def visualize_dataset(request, dataset_id):
     except Dataset.DoesNotExist:
         return Response({'error': 'Dataset not found'}, status=status.HTTP_404_NOT_FOUND)
 
-    # Prefer processed file if available
+    # Prefer processed file: metadata path, then processed_file field, then original
     file_path = None
-    if dataset.preprocessing_applied and dataset.processed_file:
+    if dataset.metadata.get('processed_file_path') and os.path.exists(dataset.metadata['processed_file_path']):
+        file_path = dataset.metadata['processed_file_path']
+    if not file_path:
+        user_id = str(request.user.id)
+        ds_id = str(dataset.id)
+        legacy_path = os.path.join(settings.MEDIA_ROOT, 'datasets', user_id, ds_id, 'processed.csv')
+        if os.path.exists(legacy_path):
+            file_path = legacy_path
+    if not file_path and dataset.preprocessing_applied and dataset.processed_file:
         try:
             file_path = dataset.processed_file.path
-            if os.path.exists(file_path):
-                pass
-            else:
+            if not os.path.exists(file_path):
                 file_path = None
         except (ValueError, AttributeError):
             file_path = None
-
     if not file_path and dataset.file:
         file_path = dataset.file.path
 
@@ -749,8 +857,8 @@ def visualize_dataset(request, dataset_id):
         return Response({'error': 'Dataset file not found'}, status=status.HTTP_404_NOT_FOUND)
 
     try:
-        df = preprocessing_service.load_dataset(file_path)
-        chart_data = visualization_service.generate_all_chart_data(df)
+        df = _get_preprocessing_service().load_dataset(file_path)
+        chart_data = _get_visualization_service().generate_all_chart_data(df)
         return Response(chart_data, status=status.HTTP_200_OK)
     except Exception as e:
         logging.error(f"Visualization failed: {e}")
@@ -788,13 +896,13 @@ def get_visualization_suggestions(request):
                  processed_path = dataset.file.path
         
         # Load dataset
-        df = preprocessing_service.load_dataset(processed_path)
+        df = _get_preprocessing_service().load_dataset(processed_path)
         
         # Profile
-        profile = preprocessing_service.profile_dataset(df)
+        profile = _get_preprocessing_service().profile_dataset(df)
         
         # Recommend
-        recommendations = visualization_service.generate_recommendations(df, profile)
+        recommendations = _get_visualization_service().generate_recommendations(df, profile)
         
         return Response({
             'success': True,
@@ -854,5 +962,3 @@ def get_saved_visualizations(request, dataset_id):
         })
     except Dataset.DoesNotExist:
         return Response({'error': 'Dataset not found'}, status=status.HTTP_404_NOT_FOUND)
-
->>>>>>> Stashed changes

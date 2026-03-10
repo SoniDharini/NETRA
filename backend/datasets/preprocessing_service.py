@@ -318,40 +318,52 @@ class PreprocessingService:
     def generate_preprocessing_suggestions(self, df: pd.DataFrame, profile: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Generate AI-driven preprocessing suggestions based on data profile & MI"""
         suggestions = []
-        target_info = profile.get('target', {})
-        target_col = target_info.get('column')
-        task = target_info.get('task')
+        target_info = profile.get('target') or {}
+        target_col = target_info.get('column') if isinstance(target_info, dict) else None
+        task = target_info.get('task') if isinstance(target_info, dict) else None
         
         # Calculate MI if target exists
         mi_scores = {}
         if target_col and task:
              mi_scores = self.calculate_mutual_information(df, target_col, task)
         
+        # Defensive: ensure required profile keys exist
+        duplicate_rows = profile.get('duplicateRows', 0) or 0
+        missing_values = profile.get('missingValues') or {}
+        if not isinstance(missing_values, dict):
+            missing_values = {}
+        
         # 1. Remove duplicates
-        if profile['duplicateRows'] > 0:
+        if duplicate_rows > 0:
             suggestions.append({
                 'type': 'remove_duplicates',
-                'description': f'Remove {profile["duplicateRows"]} duplicate rows',
+                'description': f'Remove {duplicate_rows} duplicate rows',
                 'recommended': True,
-                'rationale': f'Found {profile["duplicateRows"]} duplicates. Removing them prevents data leakage and bias.',
+                'rationale': f'Found {duplicate_rows} duplicates. Removing them prevents data leakage and bias.',
                 'group': 'cleaning',
                 'params': {}
             })
         
         # 2. Handle missing values
-        for col, info in profile['missingValues'].items():
+        for col, info in missing_values.items():
+            if col not in df.columns:
+                continue
+            if not isinstance(info, dict):
+                continue
+            info_pct = info.get('percent', 0) or 0
+            info_cnt = info.get('count', 0) or 0
             mi_score = mi_scores.get(col, 0)
             
-            if info['percent'] > 50:
+            if info_pct > 50:
                 # Logic: If >50% missing AND Low MI -> Drop
                 # If >50% missing BUT High MI -> Advanced Imputation needed (but for now drop heavily missing)
                 
                 suggestions.append({
                     'type': 'drop_column',
                     'column': col,
-                    'description': f'Drop column {col} ({info["percent"]:.1f}% missing)',
+                    'description': f'Drop column {col} ({info_pct:.1f}% missing)',
                     'recommended': True,
-                    'rationale': f'Column {col} is missing {info["percent"]:.1f}% of data. Imputation would introduce too much noise.',
+                    'rationale': f'Column {col} is missing {info_pct:.1f}% of data. Imputation would introduce too much noise.',
                     'group': 'cleaning',
                     'params': {}
                 })
@@ -369,7 +381,7 @@ class PreprocessingService:
                 suggestions.append({
                     'type': 'fill_missing',
                     'column': col,
-                    'description': f'Fill missing values in {col} ({info["count"]} rows) using {strategy}',
+                    'description': f'Fill missing values in {col} ({info_cnt} rows) using {strategy}',
                     'recommended': True,
                     'rationale': f'Missing values found. Using {strategy} imputation as it preserves distribution better.',
                     'group': 'cleaning',
@@ -377,12 +389,19 @@ class PreprocessingService:
                 })
         
         # 3. Handle Outliers
-        for col, info in profile.get('outliers', {}).items():
-            if info['percent'] < 5: 
+        outliers = profile.get('outliers') or {}
+        if not isinstance(outliers, dict):
+            outliers = {}
+        for col, info in outliers.items():
+            if col not in df.columns or not isinstance(info, dict):
+                continue
+            info_pct = info.get('percent', 0) or 0
+            info_cnt = info.get('count', 0) or 0
+            if info_pct < 5: 
                 suggestions.append({
                     'type': 'remove_outliers',
                     'column': col,
-                    'description': f'Remove outliers from {col} ({info["count"]} rows detected)',
+                    'description': f'Remove outliers from {col} ({info_cnt} rows detected)',
                     'recommended': False, # User discretional
                     'rationale': f'Outliers can skew model training. Detected via IQR method.',
                     'group': 'cleaning',
@@ -390,8 +409,10 @@ class PreprocessingService:
                 })
         
         # 4. Unsupervised Outlier Removal (Isolation Forest)
-        if profile.get('unsupervisedOutliers', {}).get('count', 0) > 0:
-             count = profile['unsupervisedOutliers']['count']
+        uo = profile.get('unsupervisedOutliers') or {}
+        uo_count = uo.get('count', 0) if isinstance(uo, dict) else 0
+        if uo_count > 0:
+             count = uo_count
              suggestions.append({
                 'type': 'remove_outliers_isolation_forest',
                 'description': f'Remove {count} anomalies detected by Isolation Forest',
@@ -402,29 +423,28 @@ class PreprocessingService:
              })
 
         # 5. Encoding
-        categorical_cols = df.select_dtypes(include=['object', 'category']).columns
+        categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
         for col in categorical_cols:
-            if col != target_col:
-                unique_count = df[col].nunique()
-                # If cardinality is high -> Label/Frequency/Target Encoding
-                # If low -> One-Hot
-                
-                if unique_count <= 10:
-                    encoding_type = 'onehot'
-                    rationale = f'Low cardinality ({unique_count}). One-hot encoding is suitable.'
-                else:
-                    encoding_type = 'label' # Default to label for simplicity in generic app
-                    rationale = f'High cardinality ({unique_count}). Label encoding is efficient.'
-                
-                suggestions.append({
-                    'type': 'encode_categorical',
-                    'column': col,
-                    'description': f'Encode {col} using {encoding_type} encoding',
-                    'recommended': True,
-                    'rationale': rationale,
-                    'group': 'encoding',
-                    'params': {'encoding': encoding_type}
-                })
+            if col not in df.columns or col == target_col:
+                continue
+            unique_count = df[col].nunique()
+            # If cardinality is high -> Label/Frequency/Target Encoding
+            # If low -> One-Hot
+            if unique_count <= 10:
+                encoding_type = 'onehot'
+                rationale = f'Low cardinality ({unique_count}). One-hot encoding is suitable.'
+            else:
+                encoding_type = 'label'  # Default to label for simplicity in generic app
+                rationale = f'High cardinality ({unique_count}). Label encoding is efficient.'
+            suggestions.append({
+                'type': 'encode_categorical',
+                'column': col,
+                'description': f'Encode {col} using {encoding_type} encoding',
+                'recommended': True,
+                'rationale': rationale,
+                'group': 'encoding',
+                'params': {'encoding': encoding_type}
+            })
         
         # 6. Scaling
         # Only scale if we have numeric columns and they have different ranges or high variance
@@ -481,25 +501,31 @@ class PreprocessingService:
     def generate_feature_engineering_suggestions(self, df: pd.DataFrame, profile: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Generate AI-driven feature engineering suggestions"""
         suggestions = []  # Initialize suggestions list
-        target_info = profile.get('target', {})
-        target_col = target_info.get('column')
-        task = target_info.get('task')
+        target_info = profile.get('target') or {}
+        target_col = target_info.get('column') if isinstance(target_info, dict) else None
+        task = target_info.get('task') if isinstance(target_info, dict) else None
         
         mi_scores = {}
-        if target_col:
-             mi_scores = self.calculate_mutual_information(df, target_col, task)
+        if target_col and target_col in df.columns:
+            mi_scores = self.calculate_mutual_information(df, target_col, task or 'regression')
              
         if HAS_ENHANCED_FEATURES:
-            suggestions.extend(generate_enhanced_feature_engineering_suggestions(df, profile, mi_scores))
+            try:
+                suggestions.extend(generate_enhanced_feature_engineering_suggestions(df, profile, mi_scores))
+            except Exception as e:
+                print(f"Enhanced feature suggestions failed: {e}")
             
         if HAS_ML_DISCOVERY:
-            # Add model-based suggestions
-            ml_suggestions = generate_ml_driven_suggestions(df, profile)
-            suggestions.extend(ml_suggestions)
-            
-            # Add unsupervised discovery suggestions
-            unsupervised_suggestions = perform_unsupervised_discovery(df)
-            suggestions.extend(unsupervised_suggestions)
+            try:
+                ml_suggestions = generate_ml_driven_suggestions(df, profile)
+                suggestions.extend(ml_suggestions or [])
+            except Exception as e:
+                print(f"ML-driven suggestions failed: {e}")
+            try:
+                unsupervised_suggestions = perform_unsupervised_discovery(df)
+                suggestions.extend(unsupervised_suggestions or [])
+            except Exception as e:
+                print(f"Unsupervised discovery failed: {e}")
             
         if HAS_ENHANCED_FEATURES or HAS_ML_DISCOVERY:
              return suggestions

@@ -100,20 +100,30 @@ def generate_enhanced_feature_engineering_suggestions(
             })
     
     # === LOG TRANSFORMATION ===
-    for col, skew in profile.get('skewness', {}).items():
-        if col != target_col and abs(skew) > 1.0 and col in df.columns:
-            if df[col].dtype in [np.number] and df[col].min() > 0:
-                suggestions.append({
-                    'type': 'log_transform',
-                    'column': col,
-                    'description': f'Log({col})',
-                    'recommended': True,
-                    'rationale': f'Skewness={skew:.2f}. Log transform normalizes distribution',
-                    'newFeatures': [f'{col}_log'],
-                    'impact': 'Adds 1 numerical column (or replaces original)',
-                    'group': 'transformation',
-                    'params': {'inplace': False}
-                })
+    skewness = profile.get('skewness') or {}
+    if not isinstance(skewness, dict):
+        skewness = {}
+    for col, skew in skewness.items():
+        if col == target_col or col not in df.columns:
+            continue
+        try:
+            skew_val = float(skew) if skew is not None else 0
+        except (TypeError, ValueError):
+            skew_val = 0
+        if abs(skew_val) <= 1.0:
+            continue
+        if pd.api.types.is_numeric_dtype(df[col]) and df[col].min() > 0:
+            suggestions.append({
+                'type': 'log_transform',
+                'column': col,
+                'description': f'Log({col})',
+                'recommended': True,
+                'rationale': f'Skewness={skew_val:.2f}. Log transform normalizes distribution',
+                'newFeatures': [f'{col}_log'],
+                'impact': 'Adds 1 numerical column (or replaces original)',
+                'group': 'transformation',
+                'params': {'inplace': False}
+            })
     
     # === BINNING ===
     for col in numeric_cols:

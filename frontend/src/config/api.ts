@@ -16,6 +16,10 @@ export const API_CONFIG = {
   
   // Timeout for API requests (in milliseconds)
   TIMEOUT: 30000,
+  // Timeout for auth (login/register) - longer for cold starts
+  AUTH_TIMEOUT: 60000,
+  // Timeout for file uploads (longer for large files) - 5 minutes
+  UPLOAD_TIMEOUT: 300000,
   
   // Maximum file upload size (in bytes) - 50MB
   MAX_FILE_SIZE: 50 * 1024 * 1024,
@@ -24,7 +28,7 @@ export const API_CONFIG = {
 export const API_ENDPOINTS = {
   // Auth
   LOGIN: 'auth/login/',
-  REGISTER: 'auth/register/',
+  REGISTER: 'auth/signup/',
   REFRESH_TOKEN: 'auth/login/refresh/',
 
   // Data Upload
@@ -32,6 +36,7 @@ export const API_ENDPOINTS = {
   LIST_DATASETS: 'datasets/uploads/',
   VALIDATE_DATA: 'datasets/get-data-profile/',
   GET_DATA_PREVIEW: 'datasets/get-data-preview/',
+  GET_DATASET_PROFILE_FULL: 'datasets/get-dataset-profile-full/',
   
   // Preprocessing
   GET_PREPROCESSING_SUGGESTIONS: 'datasets/preprocessing-suggestions/',
@@ -48,9 +53,11 @@ export const API_ENDPOINTS = {
   GET_MODEL_METRICS: '/models/metrics/',
   
   // Visualization
-  GET_VISUALIZATION_SUGGESTIONS: '/visualizations/suggestions',
-  GENERATE_VISUALIZATION: '/visualizations/generate',
-  PROCESS_NLQ: '/visualizations/nlq',
+  GET_VISUALIZATION_SUGGESTIONS: 'datasets/visualization-suggestions/',
+  SAVE_VISUALIZATION: 'datasets/save-visualization/',
+  GET_SAVED_VISUALIZATIONS: 'datasets/saved-visualizations/',
+  GENERATE_VISUALIZATION: 'visualizations/generate',
+  PROCESS_NLQ: 'visualizations/nlq',
   
   // Report Generation
   GENERATE_REPORT: '/reports/generate',
