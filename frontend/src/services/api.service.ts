@@ -489,6 +489,27 @@ class ApiService {
   }
 
   /**
+   * Apply feature engineering step
+   * @param fileId - ID of the uploaded file
+   * @param steps - Array of feature engineering steps to apply
+   */
+  async applyFeatureEngineering(
+    fileId: string,
+    steps: any[]
+  ): Promise<ApiResponse<{ processedFileId: string; summary: string }>> {
+    try {
+      const response = await api.post('datasets/apply-feature-engineering/', { fileId, steps });
+      const data = response.data?.data ?? response.data;
+      return { success: true, data };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.response?.data?.error || error.message || 'Failed to apply feature engineering',
+      };
+    }
+  }
+
+  /**
    * Get feature engineering suggestions
    * @param fileId - ID of the uploaded file
    */

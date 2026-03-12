@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Sparkles, Trash2, Droplets, Code, ArrowRight, Loader2, CheckCircle, Brain, BarChart3 } from 'lucide-react';
+import { Sparkles, Trash2, Droplets, Code, ArrowRight, Loader2, CheckCircle, Brain, BarChart3, Download } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Checkbox } from './ui/checkbox';
@@ -56,8 +56,8 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
   const latestFromContext =
     completedFiles.length > 0
       ? completedFiles.reduce((a, b) =>
-          Number(a.fileId) > Number(b.fileId) ? a : b
-        )
+        Number(a.fileId) > Number(b.fileId) ? a : b
+      )
       : null;
 
   const [selectedSteps, setSelectedSteps] = useState<Set<string>>(new Set());
@@ -70,6 +70,8 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
   const [resolvedDatasetId, setResolvedDatasetId] = useState<string | null>(null);
   const [uploadedDataset, setUploadedDataset] = useState<{ columns: string[]; rows: any[]; rowCount?: number } | null>(null);
   const [authFailed, setAuthFailed] = useState(false);
+  const [featureProcessingId, setFeatureProcessingId] = useState<string | null>(null);
+  const [appliedFeatures, setAppliedFeatures] = useState<Set<string>>(new Set());
 
   // 1. Resolve dataset ID: fetch from backend first (requires auth). On 401, show re-login message.
   useEffect(() => {
@@ -106,16 +108,17 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
     ensureDatasetId();
   }, [projectData.fileId, latestFromContext?.fileId]);
 
-  const effectiveFileId = resolvedDatasetId ?? projectData.fileId ?? latestFromContext?.fileId;
+  const effectiveFileId = resolvedDatasetId ?? latestFromContext?.fileId ?? projectData.fileId;
   const activeFile = effectiveFileId
     ? files.find(
-        (f) => (f.status === 'completed' || f.status === 'success') && String(f.fileId) === String(effectiveFileId)
-      ) ?? latestFromContext
+      (f) => (f.status === 'completed' || f.status === 'success') && String(f.fileId) === String(effectiveFileId)
+    ) ?? latestFromContext
     : latestFromContext ?? null;
 
   // 2. Fetch uploaded dataset from backend — confirms retrieval and provides preview data.
   useEffect(() => {
     const fetchUploadedDataset = async () => {
+      if (isLoading) return;
       if (!effectiveFileId) return;
       try {
         const res = await apiService.getDataPreview(String(effectiveFileId), 10);
@@ -135,11 +138,12 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
       }
     };
     fetchUploadedDataset();
-  }, [effectiveFileId]);
+  }, [effectiveFileId, isLoading]);
 
   // 3. Fetch suggestions only after we have a valid dataset ID.
   useEffect(() => {
     const fetchSuggestions = async () => {
+      if (isLoading) return;
       if (!effectiveFileId) {
         setIsLoading(false);
         return;
@@ -200,12 +204,91 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
     };
 
     fetchSuggestions();
-  }, [effectiveFileId]);
+  }, [effectiveFileId, isLoading]);
 
   const getIcon = (type: string) => ({
     remove_duplicates: Trash2, fill_missing: Droplets, encode_categorical: Code,
     normalize: Sparkles, remove_outliers: Trash2
   }[type] || Sparkles);
+
+  const buildFeatureEngineeringStep = (featureOpt: any) => {
+    const cols = Array.isArray(featureOpt.columns) ? featureOpt.columns : [];
+    const primaryColumn = featureOpt.column || cols[0];
+    const featureName = featureOpt?.name || featureOpt?.params?.name;
+    const existingParams = featureOpt?.params || {};
+
+    // Keep existing backend-native step payloads untouched.
+    if (
+      featureOpt.type === 'create_interaction' ||
+      featureOpt.type === 'polynomial_features' ||
+      featureOpt.type === 'binning' ||
+      featureOpt.type === 'datetime_features' ||
+      featureOpt.type === 'log_transform' ||
+      featureOpt.type === 'target_encoding' ||
+      featureOpt.type === 'text_features' ||
+      featureOpt.type === 'group_aggregate' ||
+      featureOpt.type === 'calculate_age' ||
+      featureOpt.type === 'create_ratio' ||
+      featureOpt.type === 'create_addition'
+    ) {
+      return {
+        type: featureOpt.type,
+        column: featureOpt.column,
+        params: {
+          ...existingParams,
+          ...(featureName ? { name: featureName } : {}),
+        },
+      };
+    }
+
+    // Compatibility adapter for mock/fallback suggestion schema.
+    if (featureOpt.type === 'interaction') {
+      return {
+        type: 'create_interaction',
+        column: `${cols[0] || ''}, ${cols[1] || ''}`,
+        params: {
+          col1: cols[0],
+          col2: cols[1],
+          operation: 'multiply',
+          ...(featureName ? { name: featureName } : {}),
+        },
+      };
+    }
+
+    if (featureOpt.type === 'polynomial') {
+      return {
+        type: 'polynomial_features',
+        column: primaryColumn,
+        params: {
+          column: primaryColumn,
+          degree: 2,
+          ...(featureName ? { name: featureName } : {}),
+        },
+      };
+    }
+
+    if (featureOpt.type === 'binning') {
+      return {
+        type: 'binning',
+        column: primaryColumn,
+        params: {
+          bins: 5,
+          strategy: 'quantile',
+          ...(featureName ? { name: featureName } : {}),
+        },
+      };
+    }
+
+    // Safe fallback: preserve server-side behavior as much as possible.
+    return {
+      type: featureOpt.type,
+      column: primaryColumn,
+      params: {
+        ...existingParams,
+        ...(featureName ? { name: featureName } : {}),
+      },
+    };
+  };
 
   const toggleStep = (id: string) => {
     setSelectedSteps(prev => {
@@ -259,6 +342,19 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
           fileId: String(processedFileId),
         });
         setResolvedDatasetId(String(processedFileId));
+        try {
+          const feRes = await apiService.getFeatureEngineeringSuggestions(String(processedFileId));
+          if (feRes.success && Array.isArray(feRes.data)) {
+            const feOpts = (feRes.data as any[]).map((s: any, idx: number) => ({
+              id: `fe_${s.type || 'fe'}_${idx}`,
+              ...s,
+            }));
+            setFeatureOptions(feOpts);
+            setAppliedFeatures(new Set());
+          }
+        } catch (_) {
+          // Keep preprocessing flow unchanged if FE refresh fails.
+        }
         setIsComplete(true);
         toast.success(typeof summary === 'string' ? summary : `Rows: ${data.rows ?? 'N/A'}, Columns: ${(data.columns ?? []).length}`);
       } else {
@@ -268,6 +364,93 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
       toast.error(error.message || 'An error occurred.');
     } finally {
       setIsProcessing(false);
+    }
+  };
+
+  const handleApplyFeature = async (featureOpt: any) => {
+    const idToUse = effectiveFileId;
+    if (!idToUse) return;
+
+    setFeatureProcessingId(featureOpt.id);
+    try {
+      const step = buildFeatureEngineeringStep(featureOpt);
+      const response = await apiService.applyFeatureEngineering(String(idToUse), [step]);
+      
+      if (response.success && response.data) {
+        const data = response.data as any;
+        const processedFileId = data.processedFileId ?? data.dataset_id ?? data.id ?? idToUse;
+        
+        setResolvedDatasetId(String(processedFileId));
+        updateProjectData({
+          fileId: String(processedFileId),
+        });
+        
+        if (data.preview) {
+          setUploadedDataset({
+            columns: data.preview.columns || [],
+            rows: data.preview.rows || [],
+            rowCount: data.rowCount
+          });
+        } else {
+          try {
+            const previewRes = await apiService.getDataPreview(String(processedFileId), 10);
+            if (previewRes.success && previewRes.data) {
+              const pd = previewRes.data as any;
+              const rows = pd.rows ?? pd.data?.rows ?? [];
+              setUploadedDataset({
+                  columns: pd.columns ?? (rows.length > 0 ? Object.keys(rows[0]) : []),
+                  rows: rows,
+                  rowCount: pd.rowCount
+              });
+            }
+          } catch (e) {
+            console.error("Failed to fetch fresh preview");
+          }
+        }
+        
+        setAppliedFeatures(prev => new Set(prev).add(featureOpt.id));
+        try {
+          const feRes = await apiService.getFeatureEngineeringSuggestions(String(processedFileId));
+          if (feRes.success && Array.isArray(feRes.data)) {
+            const feOpts = (feRes.data as any[]).map((s: any, idx: number) => ({
+              id: `fe_${s.type || 'fe'}_${idx}`,
+              ...s,
+            }));
+            setFeatureOptions(feOpts);
+          }
+        } catch (_) {
+          // Keep apply flow unchanged if FE refresh fails.
+        }
+        toast.success(`Applied feature: ${featureOpt.name || featureOpt.column || featureOpt.type}`);
+      } else {
+        toast.error(response.error || 'Failed to apply feature.');
+      }
+    } catch (error: any) {
+      toast.error(error.message || 'An error occurred while applying feature.');
+    } finally {
+      setFeatureProcessingId(null);
+    }
+  };
+
+  const handleDownload = async () => {
+    if (!resolvedDatasetId) return;
+    try {
+      const response = await apiService.downloadPreprocessedDataset(resolvedDatasetId);
+      if (response.success && response.data) {
+        const url = window.URL.createObjectURL(new Blob([response.data]));
+        const link = document.createElement('a');
+        link.href = url;
+        link.setAttribute('download', 'preprocessed_dataset.csv');
+        document.body.appendChild(link);
+        link.click();
+        if (link.parentNode) link.parentNode.removeChild(link);
+        window.URL.revokeObjectURL(url);
+        toast.success("Dataset downloaded successfully");
+      } else {
+        toast.error(response.error || "Failed to download dataset");
+      }
+    } catch (error: any) {
+      toast.error(error?.message || "An error occurred during download");
     }
   };
 
@@ -316,7 +499,7 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
         <h1 className="text-gray-900 mb-1">Data Preprocessing</h1>
         <p className="text-gray-600">Clean and prepare your data for analysis.</p>
       </div>
-      
+
       <PreviewTable
         data={
           (uploadedDataset?.rows?.length ? uploadedDataset.rows : null) ??
@@ -342,9 +525,8 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
             const isSelected = selectedSteps.has(option.id);
             return (
               <div key={option.id} onClick={() => !isProcessing && toggleStep(option.id)}
-                className={`flex items-start space-x-3 p-3 rounded-lg border transition-all cursor-pointer ${
-                  isSelected ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'
-                }`}
+                className={`flex items-start space-x-3 p-3 rounded-lg border transition-all cursor-pointer ${isSelected ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'
+                  }`}
               >
                 <Checkbox checked={isSelected} disabled={isProcessing} />
                 <div>
@@ -362,7 +544,7 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
           })}
         </CardContent>
       </Card>
-      
+
       {isProcessing && <Progress value={processingProgress} className="h-2" />}
 
       {isComplete && (
@@ -381,25 +563,89 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
               <Badge variant="outline" className="font-normal text-purple-700 border-purple-200 bg-purple-50">AI-suggested</Badge>
             </CardTitle>
             <CardDescription>
-              AI-recommended feature engineering steps (applied with full pipeline). Options marked <strong>AI Suggested</strong> are recommended by the system.
+              AI-recommended new engineered features that could improve the dataset.
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="space-y-2 text-sm text-gray-600">
-              {featureOptions.slice(0, 8).map((opt) => (
-                <div key={opt.id} className="flex items-start gap-2 p-2 rounded border bg-gray-50">
-                  <Brain className="w-4 h-4 mt-0.5 flex-shrink-0 text-purple-500" />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center flex-wrap gap-2">
-                      <p className="font-medium text-gray-800">{opt.name || opt.type}</p>
-                      {(opt.recommended === true || opt.suggested === true) && (
-                        <Badge variant="secondary" className="bg-green-100 text-green-700 text-xs">AI Suggested</Badge>
-                      )}
-                    </div>
-                    <p className="text-xs">{opt.description}</p>
-                  </div>
-                </div>
-              ))}
+            <div className="rounded-lg border overflow-hidden">
+              <Table>
+                <TableHeader className="bg-gray-50">
+                  <TableRow>
+                    <TableHead>Feature Name</TableHead>
+                    <TableHead>Description</TableHead>
+                    <TableHead>Formula / Logic</TableHead>
+                    <TableHead className="w-[100px]">Action</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {featureOptions.map((opt) => {
+                    const isApplied = appliedFeatures.has(opt.id);
+                    const isApplying = featureProcessingId === opt.id;
+                    
+                    let formula = opt.logic || "Derived AI feature";
+                    if (!opt.logic) {
+                      if (opt.type === 'create_interaction') {
+                         formula = `${opt.params?.col1 || opt.column || ''} ${opt.params?.operation === 'multiply' ? '*' : '+'} ${opt.params?.col2 || opt.column || ''}`;
+                      } else if (opt.type === 'interaction') {
+                         formula = `${opt.columns?.[0] || ''} * ${opt.columns?.[1] || ''}`;
+                      } else if (opt.type === 'create_ratio') {
+                         formula = `${opt.params?.col_num || opt.column} / ${opt.params?.col_denom || opt.column}`;
+                      } else if (opt.type === 'create_addition') {
+                         formula = `${opt.params?.col1 || opt.column} + ${opt.params?.col2 || opt.column}`;
+                      } else if (opt.type === 'polynomial_features') {
+                         formula = `${opt.column}² and ${opt.column}³`;
+                      } else if (opt.type === 'polynomial') {
+                         formula = `${opt.columns?.[0] || opt.column || ''}²`;
+                      } else if (opt.type === 'log_transform') {
+                         formula = `log(1 + ${opt.column})`;
+                      } else if (opt.type === 'calculate_age') {
+                         formula = `Current Year - Year(${opt.column})`;
+                      } else if (opt.type === 'datetime_features') {
+                         formula = `Extract time components from ${opt.column}`;
+                      } else if (opt.type === 'target_encoding') {
+                         formula = `Mean Target Value by ${opt.column}`;
+                      } else if (opt.type === 'text_features') {
+                         formula = `Length, Word Count of ${opt.column}`;
+                      } else if (opt.type === 'group_aggregate') {
+                         formula = `${opt.params?.agg_func || 'Mean'}(${opt.params?.agg_col || ''}) / ${opt.params?.group_col || ''}`;
+                      } else if (opt.type === 'binning') {
+                         formula = `Quantile binning(${opt.column})`;
+                      }
+                    }
+
+                    return (
+                      <TableRow key={opt.id}>
+                        <TableCell className="font-medium">
+                          <div className="flex items-center gap-2">
+                            {opt.name || opt.column || opt.type}
+                            {(opt.recommended === true || opt.suggested === true) && (
+                              <Badge variant="secondary" className="bg-green-100 text-green-700 text-[10px] h-5 py-0 px-1">AI Suggested</Badge>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-gray-600 text-sm">
+                           {opt.description}
+                        </TableCell>
+                        <TableCell className="text-sm">
+                           <code className="text-xs bg-slate-50 border border-slate-200 text-slate-700 rounded px-1.5 py-0.5">{formula}</code>
+                        </TableCell>
+                        <TableCell>
+                          <Button 
+                             size="sm" 
+                             variant={isApplied ? "outline" : "default"} 
+                             className={isApplied ? "text-green-600 border-green-200 bg-green-50 font-medium cursor-default hover:bg-green-50 hover:text-green-600" : ""}
+                             onClick={() => !isApplied && handleApplyFeature(opt)}
+                             disabled={isApplied || isApplying}
+                          >
+                             {isApplying ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : null}
+                             {isApplied ? "Applied" : "Apply"}
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
             </div>
           </CardContent>
         </Card>
@@ -411,7 +657,10 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
           {isProcessing ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Processing...</> : 'Apply Preprocessing'}
         </Button>
         {isComplete && (
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2 mt-2 sm:mt-0">
+            <Button variant="secondary" onClick={handleDownload} className="flex items-center bg-blue-100 hover:bg-blue-200 text-blue-700">
+              <Download className="w-4 h-4 mr-2" /> Download Preprocessed Dataset
+            </Button>
             <Button variant="outline" onClick={() => { markStepComplete('preprocessing'); onNavigate('visualization'); }}>
               Continue to Visualization <ArrowRight className="w-4 h-4 ml-2" />
             </Button>

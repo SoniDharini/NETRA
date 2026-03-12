@@ -573,6 +573,95 @@ def apply_preprocessing(request, dataset_id=None):
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def apply_feature_engineering_step(request, dataset_id=None):
+    """Apply feature engineering steps on the LATEST dataset state"""
+    file_id = dataset_id or request.data.get('fileId')
+    steps = request.data.get('steps', [])
+    
+    if not file_id:
+        return Response({'error': 'fileId is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+    try:
+        logger.info("Feature engineering started: fileId=%s, steps=%s", file_id, len(steps))
+        dataset = Dataset.objects.get(id=file_id, user=request.user)
+        
+        # Load the LATEST dataset state (prioritize processed over original)
+        current_path = None
+        if dataset.preprocessing_applied:
+            if dataset.processed_file:
+                try:
+                    current_path = dataset.processed_file.path
+                except (ValueError, AttributeError): pass
+            if not current_path or not os.path.exists(current_path):
+                user_id = str(request.user.id)
+                ds_id = str(dataset.id)
+                current_path = os.path.join(str(settings.MEDIA_ROOT), 'datasets', 'preprocessed', user_id, ds_id, 'processed.csv')
+            if not current_path or not os.path.exists(current_path):
+                current_path = dataset.metadata.get('processed_file_path')
+                
+        if not current_path or not os.path.exists(current_path):
+            current_path = _resolve_dataset_file_path(dataset)
+            
+        if not current_path or not os.path.exists(current_path):
+            return Response({'error': 'Dataset file not found on disk'}, status=status.HTTP_404_NOT_FOUND)
+
+        df = _get_preprocessing_service().load_dataset(current_path)
+        
+        # Apply transformation
+        df_processed, summary = _get_preprocessing_service().apply_preprocessing(df, steps)
+        
+        # Save to processed path
+        user_id = str(request.user.id)
+        ds_id = str(dataset.id)
+        preprocessed_dir = os.path.join(str(settings.MEDIA_ROOT), 'datasets', 'preprocessed', user_id, ds_id)
+        os.makedirs(preprocessed_dir, exist_ok=True)
+        processed_path = os.path.join(preprocessed_dir, 'processed.csv')
+        df_processed.to_csv(processed_path, index=False)
+        
+        processed_filename = f"processed_{dataset.name}.csv"
+        if not processed_filename.endswith('.csv'):
+            processed_filename += '.csv'
+        csv_buffer = df_processed.to_csv(index=False)
+        dataset.processed_file.save(processed_filename, ContentFile(csv_buffer.encode('utf-8')), save=False)
+        dataset.preprocessing_applied = True
+        
+        fe_summaries = dataset.metadata.get('fe_summary', [])
+        if not isinstance(fe_summaries, list): fe_summaries = [fe_summaries]
+        fe_summaries.append(summary)
+
+        dataset.metadata.update({
+            'processed': True,
+            'processed_file_path': processed_path,
+            'last_processed_at': str(pd.Timestamp.now()),
+            'fe_summary': fe_summaries
+        })
+        dataset.save()
+        
+        preview = df_processed.head(5).iloc[:, :min(5, len(df_processed.columns))]
+        preview_clean = preview.astype(object).where(pd.notnull(preview), None).replace([float('inf'), float('-inf')], None)
+        
+        return Response({
+            'success': True,
+            'data': {
+                'processedFileId': dataset.id,
+                'summary': summary['summary'],
+                'preview': {
+                    'columns': list(preview.columns),
+                    'rows': preview_clean.to_dict(orient='records')
+                },
+                'rowCount': len(df_processed)
+            }
+        })
+    except Dataset.DoesNotExist:
+        return Response({'error': 'Dataset not found'}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def download_preprocessed_data(request, dataset_id=None):
@@ -612,13 +701,28 @@ def download_preprocessed_data(request, dataset_id=None):
                 else:
                     return Response({'error': 'Processed dataset not found. Please run preprocessing first.'}, status=status.HTTP_404_NOT_FOUND)
 
-        # Serve file
-        response = HttpResponse(content_type='text/csv')
-        response['Content-Disposition'] = f'attachment; filename="processed_{dataset.name}.csv"'
+        # Export processed dataset as CSV
+        import pandas as pd
         
-        with open(processed_path, 'rb') as f:
-            response.write(f.read())
-        return response
+        try:
+            df_export = pd.read_csv(processed_path)
+            csv_data = df_export.to_csv(index=False)
+            response = HttpResponse(csv_data, content_type='text/csv')
+            
+            # Use original name with .csv or replace extension
+            base_name = dataset.name
+            if base_name.endswith('.csv') or base_name.endswith('.tsv') or base_name.endswith('.txt'):
+                base_name = base_name.rsplit('.', 1)[0]
+                
+            response['Content-Disposition'] = f'attachment; filename="processed_{base_name}.csv"'
+            return response
+        except Exception as csv_err:
+            # Fallback if pandas fails
+            response = HttpResponse(content_type='text/csv')
+            response['Content-Disposition'] = f'attachment; filename="processed_{dataset.name}.csv"'
+            with open(processed_path, 'rb') as f:
+                response.write(f.read())
+            return response
 
     except Dataset.DoesNotExist:
         return Response({'error': 'Dataset not found'}, status=status.HTTP_404_NOT_FOUND)

@@ -642,7 +642,12 @@ class PreprocessingService:
                      col1 = params.get('col1')
                      col2 = params.get('col2')
                      if col1 in df_processed.columns and col2 in df_processed.columns:
-                         new_col_name = f"{col1}_x_{col2}"
+                         new_col_name = params.get('name', f"{col1}_x_{col2}")
+                         if new_col_name in df_processed.columns:
+                             suffix = 1
+                             while f"{new_col_name}_{suffix}" in df_processed.columns:
+                                 suffix += 1
+                             new_col_name = f"{new_col_name}_{suffix}"
                          df_processed[new_col_name] = df_processed[col1] * df_processed[col2]
                          engineered_features.append(new_col_name)
                          applied_steps.append({'type': step_type, 'description': f'Created interaction {new_col_name}'})
@@ -661,7 +666,7 @@ class PreprocessingService:
                      engineered_features.append(f'{column}_binned')
                      applied_steps.append({'type': step_type, 'description': f'Binned {column} into {bins} bins ({strategy})'})
 
-                elif step_type in ['polynomial_features', 'datetime_features', 'target_encoding', 'text_features', 'group_aggregate', 'calculate_age', 'create_ratio']:
+                elif step_type in ['polynomial_features', 'datetime_features', 'target_encoding', 'text_features', 'group_aggregate', 'calculate_age', 'create_ratio', 'create_addition']:
                      if HAS_ENHANCED_FEATURES:
                          df_processed = apply_enhanced_feature_engineering(df_processed, step)
                          
@@ -672,30 +677,37 @@ class PreprocessingService:
                              'text_features': f'Extracted text features from {column}',
                              'group_aggregate': f'Created group aggregate: {column}',
                              'calculate_age': f'Calculated age from {column}',
-                             'create_ratio': f'Created ratio feature'
+                             'create_ratio': f'Created ratio feature',
+                             'create_addition': f'Created addition feature'
                          }
                          
                          # Track features based on type
                          if step_type == 'polynomial_features':
-                              engineered_features.extend([f'{column}_squared', f'{column}_cubed'])
+                             engineered_features.append(params.get('name', f'{column}_squared'))
                          elif step_type == 'datetime_features':
-                              engineered_features.extend([f'{column}_year', f'{column}_month', f'{column}_day', f'{column}_weekday'])
+                             engineered_features.append(params.get('name', f'{column}_Year'))
                          elif step_type == 'target_encoding':
-                              engineered_features.append(f'{column}_target_enc')
+                             engineered_features.append(params.get('name', f'{column}_target_enc'))
                          elif step_type == 'text_features':
-                              engineered_features.extend([f'{column}_length', f'{column}_word_count'])
+                             engineered_features.append(params.get('name', f'{column}_Length'))
                          elif step_type == 'group_aggregate':
-                              agg_col = params.get('agg_col')
-                              group_col = params.get('group_col')
-                              agg_func = params.get('agg_func', 'mean')
-                              engineered_features.append(f'{agg_col}_{agg_func}_by_{group_col}')
+                            agg_col = params.get('agg_col')
+                            group_col = params.get('group_col')
+                            agg_func = params.get('agg_func', 'mean')
+                            engineered_features.append(params.get('name', f'{agg_col}_{agg_func}_by_{group_col}'))
                          elif step_type == 'calculate_age':
-                              engineered_features.append(f'{column}_age')
+                             engineered_features.append(params.get('name', f'{column}_age'))
                          elif step_type == 'create_ratio':
-                               num = params.get('col_num')
-                               denom = params.get('col_denom')
-                               engineered_features.append(f'{num}_div_{denom}')
-
+                            num = params.get('col_num')
+                            denom = params.get('col_denom')
+                            name = params.get('name', f'{num}_div_{denom}')
+                            engineered_features.append(name)
+                         elif step_type == 'create_addition':
+                            c1 = params.get('col1')
+                            c2 = params.get('col2')
+                            name = params.get('name', f'{c1}_plus_{c2}')
+                            engineered_features.append(name)
+                         
                          applied_steps.append({'type': step_type, 'description': desc_map.get(step_type, f'Applied {step_type}')})
                      else:
                         print(f"Warning: Step {step_type} requested but enhanced features module missing")

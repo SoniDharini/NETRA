@@ -12,6 +12,7 @@ from .views import (
     get_preprocessing_suggestions,
     get_feature_engineering_suggestions,
     apply_preprocessing,
+    apply_feature_engineering_step,
     download_preprocessed_data,
     profile_and_suggest_features,
     auto_process_dataset,
@@ -34,6 +35,7 @@ urlpatterns = [
     path('feature-engineering-suggestions/', get_feature_engineering_suggestions, name='feature-engineering-suggestions'),
     path('<int:dataset_id>/profile-and-suggest/', profile_and_suggest_features, name='profile-and-suggest-features'),
     path('apply-preprocessing/', apply_preprocessing, name='apply-preprocessing'),
+    path('apply-feature-engineering/', apply_feature_engineering_step, name='apply-feature-engineering'),
     path('auto-process/', auto_process_dataset, name='auto-process-dataset'),
     path('download-preprocessed/', download_preprocessed_data, name='download-preprocessed'),
     
