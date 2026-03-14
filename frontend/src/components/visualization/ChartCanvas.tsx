@@ -21,17 +21,29 @@ import { Card, CardContent } from '../ui/card';
 import { Button } from '../ui/button';
 import { Download, Maximize2 } from 'lucide-react';
 import { ChartConfig, FieldItem } from '../Visualization';
+import { FormatConfig } from './FormatPanel';
 
 interface ChartCanvasProps {
   config: ChartConfig;
   chartType: string;
   data: any[];
-  onExport: () => void;
+  onExport: (format?: 'png' | 'pdf' | 'json') => void;
+  formatConfig?: FormatConfig;
+  chartDomId?: string;
+  color?: string;
+  size?: number;
 }
 
-const COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#6366f1', '#f43f5e'];
+const COLOR_SCHEME_MAP: Record<string, string[]> = {
+  default: ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#6366f1', '#f43f5e'],
+  cool: ['#06b6d4', '#3b82f6', '#8b5cf6', '#6366f1', '#0ea5e9', '#14b8a6'],
+  warm: ['#f59e0b', '#f97316', '#ef4444', '#ec4899', '#fb7185', '#f43f5e'],
+  earth: ['#78716c', '#a3a3a3', '#737373', '#525252', '#a8a29e', '#44403c'],
+  ocean: ['#06b6d4', '#0891b2', '#0e7490', '#155e75', '#0284c7', '#0369a1'],
+  forest: ['#10b981', '#059669', '#047857', '#065f46', '#22c55e', '#16a34a'],
+};
 
-export function ChartCanvas({ config, chartType, data, onExport }: ChartCanvasProps) {
+export function ChartCanvas({ config, chartType, data, onExport, formatConfig, chartDomId, color, size = 5 }: ChartCanvasProps) {
   // Helper to get field names
   const getFieldName = (field: FieldItem | undefined) => field?.name || '';
   
@@ -47,6 +59,11 @@ export function ChartCanvas({ config, chartType, data, onExport }: ChartCanvasPr
 
   // Filter and prepare data if needed
   const chartData = data.length > 0 ? data : [];
+  const chartOpacity = (formatConfig?.chartOpacity ?? 100) / 100;
+  const colors = COLOR_SCHEME_MAP[formatConfig?.colorScheme || 'default'] || COLOR_SCHEME_MAP.default;
+  const primaryColor = color || colors[0];
+  const resolvedSize = Math.max(1, Math.min(10, size));
+  const axisTickStyle = { fontSize: formatConfig?.fontSize ?? 12 };
 
   // Empty state
   if (!hasRows && !hasColumns) {
@@ -78,7 +95,7 @@ export function ChartCanvas({ config, chartType, data, onExport }: ChartCanvasPr
   }
 
   // Explicit height required for Recharts ResponsiveContainer (100% fails in flex layouts)
-  const CHART_HEIGHT = 320;
+  const CHART_HEIGHT = 220 + resolvedSize * 28;
 
   // Render the appropriate chart based on type
   const renderChart = () => {
@@ -95,9 +112,9 @@ export function ChartCanvas({ config, chartType, data, onExport }: ChartCanvasPr
         return (
           <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
             <BarChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-              <XAxis dataKey={xField} stroke="#6b7280" />
-              <YAxis stroke="#6b7280" />
+              {formatConfig?.showGridLines !== false && <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />}
+              <XAxis dataKey={xField} stroke="#6b7280" tick={axisTickStyle} />
+              <YAxis stroke="#6b7280" tick={axisTickStyle} />
               <Tooltip 
                 contentStyle={{ 
                   backgroundColor: 'white', 
@@ -105,12 +122,13 @@ export function ChartCanvas({ config, chartType, data, onExport }: ChartCanvasPr
                   borderRadius: '8px' 
                 }} 
               />
-              <Legend />
+              {formatConfig?.showLegend !== false && <Legend />}
               {config.rows.map((row, idx) => (
                 <Bar
                   key={row.name}
                   dataKey={row.name}
-                  fill={COLORS[idx % COLORS.length]}
+                  fill={idx === 0 ? primaryColor : colors[idx % colors.length]}
+                  fillOpacity={chartOpacity}
                   radius={[4, 4, 0, 0]}
                 />
               ))}
@@ -122,9 +140,9 @@ export function ChartCanvas({ config, chartType, data, onExport }: ChartCanvasPr
         return (
           <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
             <LineChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-              <XAxis dataKey={xField} stroke="#6b7280" />
-              <YAxis stroke="#6b7280" />
+              {formatConfig?.showGridLines !== false && <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />}
+              <XAxis dataKey={xField} stroke="#6b7280" tick={axisTickStyle} />
+              <YAxis stroke="#6b7280" tick={axisTickStyle} />
               <Tooltip 
                 contentStyle={{ 
                   backgroundColor: 'white', 
@@ -132,15 +150,16 @@ export function ChartCanvas({ config, chartType, data, onExport }: ChartCanvasPr
                   borderRadius: '8px' 
                 }} 
               />
-              <Legend />
+              {formatConfig?.showLegend !== false && <Legend />}
               {config.rows.map((row, idx) => (
                 <Line
                   key={row.name}
                   type="monotone"
                   dataKey={row.name}
-                  stroke={COLORS[idx % COLORS.length]}
+                  stroke={idx === 0 ? primaryColor : colors[idx % colors.length]}
+                  strokeOpacity={chartOpacity}
                   strokeWidth={2}
-                  dot={{ fill: COLORS[idx % COLORS.length], r: 4 }}
+                  dot={{ fill: idx === 0 ? primaryColor : colors[idx % colors.length], r: 4 }}
                 />
               ))}
             </LineChart>
@@ -151,9 +170,9 @@ export function ChartCanvas({ config, chartType, data, onExport }: ChartCanvasPr
         return (
           <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
             <AreaChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-              <XAxis dataKey={xField} stroke="#6b7280" />
-              <YAxis stroke="#6b7280" />
+              {formatConfig?.showGridLines !== false && <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />}
+              <XAxis dataKey={xField} stroke="#6b7280" tick={axisTickStyle} />
+              <YAxis stroke="#6b7280" tick={axisTickStyle} />
               <Tooltip 
                 contentStyle={{ 
                   backgroundColor: 'white', 
@@ -161,15 +180,16 @@ export function ChartCanvas({ config, chartType, data, onExport }: ChartCanvasPr
                   borderRadius: '8px' 
                 }} 
               />
-              <Legend />
+              {formatConfig?.showLegend !== false && <Legend />}
               {config.rows.map((row, idx) => (
                 <Area
                   key={row.name}
                   type="monotone"
                   dataKey={row.name}
-                  fill={COLORS[idx % COLORS.length]}
-                  stroke={COLORS[idx % COLORS.length]}
-                  fillOpacity={0.6}
+                  fill={idx === 0 ? primaryColor : colors[idx % colors.length]}
+                  stroke={idx === 0 ? primaryColor : colors[idx % colors.length]}
+                  fillOpacity={Math.max(0.1, chartOpacity * 0.6)}
+                  strokeOpacity={chartOpacity}
                 />
               ))}
             </AreaChart>
@@ -180,9 +200,9 @@ export function ChartCanvas({ config, chartType, data, onExport }: ChartCanvasPr
         return (
           <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
             <ScatterChart>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-              <XAxis dataKey={xField} name={xField} stroke="#6b7280" />
-              <YAxis dataKey={yField} name={yField} stroke="#6b7280" />
+              {formatConfig?.showGridLines !== false && <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />}
+              <XAxis dataKey={xField} name={xField} stroke="#6b7280" tick={axisTickStyle} />
+              <YAxis dataKey={yField} name={yField} stroke="#6b7280" tick={axisTickStyle} />
               <Tooltip 
                 cursor={{ strokeDasharray: '3 3' }}
                 contentStyle={{ 
@@ -191,11 +211,12 @@ export function ChartCanvas({ config, chartType, data, onExport }: ChartCanvasPr
                   borderRadius: '8px' 
                 }} 
               />
-              <Legend />
+              {formatConfig?.showLegend !== false && <Legend />}
               <Scatter
                 name={`${xField} vs ${yField}`}
                 data={chartData}
-                fill="#3b82f6"
+                fill={primaryColor}
+                fillOpacity={chartOpacity}
               />
             </ScatterChart>
           </ResponsiveContainer>
@@ -214,11 +235,11 @@ export function ChartCanvas({ config, chartType, data, onExport }: ChartCanvasPr
                 cx="50%"
                 cy="50%"
                 outerRadius={120}
-                label={(entry) => entry[xField]}
-                labelLine={true}
+                label={formatConfig?.showLabels !== false ? (entry) => entry[xField] : false}
+                labelLine={formatConfig?.showLabels !== false}
               >
                 {chartData.map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                  <Cell key={`cell-${index}`} fill={color || colors[index % colors.length]} fillOpacity={chartOpacity} />
                 ))}
               </Pie>
               <Tooltip 
@@ -228,7 +249,7 @@ export function ChartCanvas({ config, chartType, data, onExport }: ChartCanvasPr
                   borderRadius: '8px' 
                 }} 
               />
-              <Legend />
+              {formatConfig?.showLegend !== false && <Legend />}
             </PieChart>
           </ResponsiveContainer>
         );
@@ -239,9 +260,9 @@ export function ChartCanvas({ config, chartType, data, onExport }: ChartCanvasPr
         return (
           <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
             <BarChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-              <XAxis dataKey={xField} stroke="#6b7280" />
-              <YAxis stroke="#6b7280" />
+              {formatConfig?.showGridLines !== false && <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />}
+              <XAxis dataKey={xField} stroke="#6b7280" tick={axisTickStyle} />
+              <YAxis stroke="#6b7280" tick={axisTickStyle} />
               <Tooltip 
                 contentStyle={{ 
                   backgroundColor: 'white', 
@@ -249,10 +270,11 @@ export function ChartCanvas({ config, chartType, data, onExport }: ChartCanvasPr
                   borderRadius: '8px' 
                 }} 
               />
-              <Legend />
+              {formatConfig?.showLegend !== false && <Legend />}
               <Bar
                 dataKey={histDataKey}
-                fill="#3b82f6"
+                fill={primaryColor}
+                fillOpacity={chartOpacity}
                 radius={[4, 4, 0, 0]}
               />
             </BarChart>
@@ -263,9 +285,9 @@ export function ChartCanvas({ config, chartType, data, onExport }: ChartCanvasPr
         return (
           <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
             <BarChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-              <XAxis dataKey={xField} stroke="#6b7280" />
-              <YAxis stroke="#6b7280" />
+              {formatConfig?.showGridLines !== false && <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />}
+              <XAxis dataKey={xField} stroke="#6b7280" tick={axisTickStyle} />
+              <YAxis stroke="#6b7280" tick={axisTickStyle} />
               <Tooltip 
                 contentStyle={{ 
                   backgroundColor: 'white', 
@@ -273,12 +295,13 @@ export function ChartCanvas({ config, chartType, data, onExport }: ChartCanvasPr
                   borderRadius: '8px' 
                 }} 
               />
-              <Legend />
+              {formatConfig?.showLegend !== false && <Legend />}
               {config.rows.map((row, idx) => (
                 <Bar
                   key={row.name}
                   dataKey={row.name}
-                  fill={COLORS[idx % COLORS.length]}
+                  fill={idx === 0 ? primaryColor : colors[idx % colors.length]}
+                  fillOpacity={chartOpacity}
                   radius={[4, 4, 0, 0]}
                 />
               ))}
@@ -289,7 +312,7 @@ export function ChartCanvas({ config, chartType, data, onExport }: ChartCanvasPr
   };
 
   return (
-    <Card className="flex-1 flex flex-col min-h-[500px]">
+    <Card className="flex-1 flex flex-col min-h-[500px]" id={chartDomId}>
       <div className="p-4 border-b flex items-center justify-between bg-white">
         <div>
           <h3 className="text-gray-900">
@@ -304,7 +327,7 @@ export function ChartCanvas({ config, chartType, data, onExport }: ChartCanvasPr
             <Maximize2 className="w-4 h-4 mr-2" />
             Fullscreen
           </Button>
-          <Button variant="outline" size="sm" onClick={onExport}>
+          <Button variant="outline" size="sm" onClick={() => onExport('png')}>
             <Download className="w-4 h-4 mr-2" />
             Export
           </Button>

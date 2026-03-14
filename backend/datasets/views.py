@@ -82,6 +82,14 @@ class JsonUploadView(APIView):
 
 
 logger = logging.getLogger(__name__)
+_db_connected_logged = False
+
+
+def _log_database_connected_once():
+    global _db_connected_logged
+    if not _db_connected_logged:
+        logger.info("Database Connected")
+        _db_connected_logged = True
 
 
 def _resolve_dataset_file_path(dataset):
@@ -116,6 +124,7 @@ def upload_dataset(request):
         return Response({'error': 'Unsupported format. Use CSV, JSON, or XLSX.'}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
+        _log_database_connected_once()
         logger.info("Upload started: %s (user=%s)", uploaded_file.name, request.user.id)
         dataset = Dataset(user=request.user, name=request.data.get('name', uploaded_file.name), metadata={})
         dataset.file.save(uploaded_file.name, uploaded_file, save=True)
@@ -139,6 +148,7 @@ def upload_dataset(request):
         dataset.metadata['columnCount'] = len(df.columns)
         dataset.save()
 
+        logger.info("Dataset Stored: dataset_id=%s", dataset.id)
         logger.info("Upload success: dataset_id=%s, rows=%s", dataset.id, dataset.rows)
         return Response({
             'id': str(dataset.id),
@@ -210,9 +220,11 @@ def get_data_preview(request):
         return Response({'error': 'fileId is required'}, status=status.HTTP_400_BAD_REQUEST)
     
     try:
+        _log_database_connected_once()
         # Verify dataset exists and belongs to user
         try:
             dataset = Dataset.objects.get(id=file_id, user=request.user)
+            logger.info("Dataset Retrieved: dataset_id=%s", dataset.id)
             logging.info(f"Dataset found: {dataset.name}")
 
             if not dataset.file:
@@ -440,6 +452,7 @@ def preprocess_dataset(request, dataset_id):
     Run full preprocessing pipeline, save processed file, update model.
     """
     try:
+        _log_database_connected_once()
         dataset = Dataset.objects.get(id=dataset_id, user=request.user)
     except Dataset.DoesNotExist:
         return Response({'error': 'Dataset not found'}, status=status.HTTP_404_NOT_FOUND)
@@ -933,6 +946,7 @@ def visualize_dataset(request, dataset_id):
     Return chart data: histogram, bar_chart, correlation for frontend rendering.
     """
     try:
+        _log_database_connected_once()
         dataset = Dataset.objects.get(id=dataset_id, user=request.user)
     except Dataset.DoesNotExist:
         return Response({'error': 'Dataset not found'}, status=status.HTTP_404_NOT_FOUND)
@@ -962,6 +976,7 @@ def visualize_dataset(request, dataset_id):
 
     try:
         df = _get_preprocessing_service().load_dataset(file_path)
+        logger.info("Pipeline Data Loaded: dataset_id=%s", dataset.id)
         chart_data = _get_visualization_service().generate_all_chart_data(df)
         return Response(chart_data, status=status.HTTP_200_OK)
     except Exception as e:

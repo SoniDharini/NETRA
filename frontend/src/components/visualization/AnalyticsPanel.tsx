@@ -18,6 +18,11 @@ export interface AnalyticsConfig {
   aggregation: 'sum' | 'average' | 'count' | 'min' | 'max';
   filterType?: 'top' | 'bottom';
   filterCount?: number;
+  runningTotal?: boolean;
+  movingAverage?: boolean;
+  movingAverageWindow?: number;
+  trendAnalysis?: boolean;
+  distributionAnalysis?: boolean;
 }
 
 export function AnalyticsPanel({ onApplyAnalytics }: AnalyticsPanelProps) {
@@ -26,6 +31,11 @@ export function AnalyticsPanel({ onApplyAnalytics }: AnalyticsPanelProps) {
     showAverage: false,
     showMedian: false,
     aggregation: 'sum',
+    runningTotal: false,
+    movingAverage: false,
+    movingAverageWindow: 3,
+    trendAnalysis: false,
+    distributionAnalysis: false,
   });
 
   const updateConfig = (updates: Partial<AnalyticsConfig>) => {
@@ -90,6 +100,19 @@ export function AnalyticsPanel({ onApplyAnalytics }: AnalyticsPanelProps) {
 
           <div className="flex items-center space-x-2">
             <Checkbox
+              id="trend-analysis"
+              checked={!!config.trendAnalysis}
+              onCheckedChange={(checked) =>
+                updateConfig({ trendAnalysis: checked as boolean })
+              }
+            />
+            <Label htmlFor="trend-analysis" className="cursor-pointer">
+              Trend Analysis
+            </Label>
+          </div>
+
+          <div className="flex items-center space-x-2">
+            <Checkbox
               id="average-line"
               checked={config.showAverage}
               onCheckedChange={(checked) =>
@@ -111,6 +134,59 @@ export function AnalyticsPanel({ onApplyAnalytics }: AnalyticsPanelProps) {
             />
             <Label htmlFor="median-line" className="cursor-pointer">
               Show Median Line
+            </Label>
+          </div>
+
+          <div className="flex items-center space-x-2">
+            <Checkbox
+              id="running-total"
+              checked={!!config.runningTotal}
+              onCheckedChange={(checked) =>
+                updateConfig({ runningTotal: checked as boolean })
+              }
+            />
+            <Label htmlFor="running-total" className="cursor-pointer">
+              Running Totals
+            </Label>
+          </div>
+
+          <div className="flex items-center space-x-2">
+            <Checkbox
+              id="moving-average"
+              checked={!!config.movingAverage}
+              onCheckedChange={(checked) =>
+                updateConfig({ movingAverage: checked as boolean })
+              }
+            />
+            <Label htmlFor="moving-average" className="cursor-pointer">
+              Moving Average
+            </Label>
+          </div>
+
+          {config.movingAverage && (
+            <div>
+              <Label>Moving Average Window: {config.movingAverageWindow || 3}</Label>
+              <Slider
+                value={[config.movingAverageWindow || 3]}
+                onValueChange={([value]) => updateConfig({ movingAverageWindow: value })}
+                min={2}
+                max={20}
+                step={1}
+                className="mt-2"
+              />
+            </div>
+          )}
+
+          <div className="flex items-center space-x-2">
+            <Checkbox
+              id="distribution-analysis"
+              checked={!!config.distributionAnalysis}
+              onCheckedChange={(checked) =>
+                updateConfig({ distributionAnalysis: checked as boolean })
+              }
+            />
+            <Label htmlFor="distribution-analysis" className="cursor-pointer">
+              Distribution Analysis
             </Label>
           </div>
         </CardContent>

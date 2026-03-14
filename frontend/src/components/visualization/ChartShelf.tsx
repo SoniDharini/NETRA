@@ -98,10 +98,6 @@ export function ChartShelf({ config, onUpdateConfig, fields }: ChartShelfProps) 
     onUpdateConfig({ rows: [...config.rows, field] });
   };
 
-  const handleDropColor = (field: FieldItem) => {
-    onUpdateConfig({ color: field });
-  };
-
   const handleDropSize = (field: FieldItem) => {
     onUpdateConfig({ size: field });
   };
@@ -114,10 +110,6 @@ export function ChartShelf({ config, onUpdateConfig, fields }: ChartShelfProps) 
   const handleRemoveRow = (index: number) => {
     const newRows = config.rows.filter((_, i) => i !== index);
     onUpdateConfig({ rows: newRows });
-  };
-
-  const handleRemoveColor = () => {
-    onUpdateConfig({ color: undefined });
   };
 
   const handleRemoveSize = () => {
@@ -142,31 +134,7 @@ export function ChartShelf({ config, onUpdateConfig, fields }: ChartShelfProps) 
         onRemove={handleRemoveRow}
       />
 
-      {/* Additional Properties */}
-      <div className="flex space-x-4">
-        {/* Color */}
-        <div className="flex-1">
-          <DropZone
-            label="Color"
-            items={config.color ? [config.color] : []}
-            onDrop={handleDropColor}
-            onRemove={handleRemoveColor}
-            maxItems={1}
-          />
-        </div>
-
-        {/* Size */}
-        <div className="flex-1">
-          <DropZone
-            label="Size"
-            items={config.size ? [config.size] : []}
-            onDrop={handleDropSize}
-            onRemove={handleRemoveSize}
-            maxItems={1}
-            accept="measure"
-          />
-        </div>
-      </div>
+      
     </div>
   );
 }

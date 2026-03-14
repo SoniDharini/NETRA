@@ -18,10 +18,11 @@ __pycache__/
 *.pyd
 venv/
 .venv/
+*.sqlite3
 
 # Datasets & Large Files
-datasets/
-uploads/
+/datasets/
+/uploads/
 *.csv
 *.zip
 *.pkl
