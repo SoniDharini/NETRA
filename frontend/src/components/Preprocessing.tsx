@@ -340,6 +340,7 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
             ? Array.from(selectedSteps).map(id => preprocessingOptions.find(opt => opt.id === id)?.label || id)
             : ['Full pipeline (missing values, duplicates, normalize, encode)'],
           fileId: String(processedFileId),
+          columns: uploadedDataset?.columns || [],
         });
         setResolvedDatasetId(String(processedFileId));
         try {
@@ -383,6 +384,7 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
         setResolvedDatasetId(String(processedFileId));
         updateProjectData({
           fileId: String(processedFileId),
+          columns: data.preview?.columns || uploadedDataset?.columns || [],
         });
         
         if (data.preview) {

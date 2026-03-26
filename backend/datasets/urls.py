@@ -18,7 +18,8 @@ from .views import (
     auto_process_dataset,
     get_visualization_suggestions,
     save_visualization,
-    get_saved_visualizations
+    get_saved_visualizations,
+    train_model
 )
 
 router = DefaultRouter()
@@ -49,4 +50,7 @@ urlpatterns = [
     path('visualization-suggestions/', get_visualization_suggestions, name='visualization-suggestions'),
     path('save-visualization/', save_visualization, name='save-visualization'),
     path('saved-visualizations/<int:dataset_id>/', get_saved_visualizations, name='get-saved-visualizations'),
+
+    # ML Training
+    path('train/', train_model, name='train-model'),
 ]

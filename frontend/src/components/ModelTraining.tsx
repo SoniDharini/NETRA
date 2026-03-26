@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Brain, Upload, ArrowRight, Loader2, CheckCircle, TrendingUp, FileUp, X } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Brain, Upload, ArrowRight, Loader2, CheckCircle, TrendingUp, FileUp, X, RefreshCw } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
@@ -8,10 +8,12 @@ import { Progress } from './ui/progress';
 import { Slider } from './ui/slider';
 import { Label } from './ui/label';
 import { RadioGroup, RadioGroupItem } from './ui/radio-group';
-import { toast } from 'sonner@2.0.3';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
+import { toast } from 'sonner';
 import { ProjectData } from '../App';
 import { NLQBar } from './NLQBar';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
+import { apiService } from '../services/api.service';
 
 interface ModelTrainingProps {
   onNavigate: (section: any) => void;
@@ -22,6 +24,7 @@ interface ModelTrainingProps {
 
 export function ModelTraining({ onNavigate, projectData, updateProjectData, markStepComplete }: ModelTrainingProps) {
   const [selectedModel, setSelectedModel] = useState<string>('');
+  const [targetColumn, setTargetColumn] = useState<string>('');
   const [isTraining, setIsTraining] = useState(false);
   const [trainingProgress, setTrainingProgress] = useState(0);
   const [isComplete, setIsComplete] = useState(false);
@@ -29,12 +32,47 @@ export function ModelTraining({ onNavigate, projectData, updateProjectData, mark
   const [modelMetrics, setModelMetrics] = useState<any>(null);
   const [uploadedModelFile, setUploadedModelFile] = useState<File | null>(null);
   const [modelSource, setModelSource] = useState<'builtin' | 'upload'>('builtin');
+  const [fetchedColumns, setFetchedColumns] = useState<string[]>([]);
+  const [isFetchingColumns, setIsFetchingColumns] = useState(false);
+  
+  // Available columns: prefer live-fetched over projectData (which may be pre-preprocessing)
+  const columns = fetchedColumns.length > 0
+    ? fetchedColumns
+    : (projectData.columns || []);
+
+
+  const fileId = projectData.fileId;
+
+  // Fetch columns from backend when we have a fileId but no/stale columns
+  useEffect(() => {
+    const loadColumns = async () => {
+      if (!fileId) return;
+      setIsFetchingColumns(true);
+      try {
+        const res = await apiService.getDataPreview(String(fileId), 5);
+        if (res.success && res.data) {
+          const d = res.data as any;
+          const cols: string[] = d.columns ?? (d.rows?.length > 0 ? Object.keys(d.rows[0]) : []);
+          if (cols.length > 0) {
+            setFetchedColumns(cols);
+            // Also persist to projectData so other components have fresh columns
+            updateProjectData({ columns: cols });
+          }
+        }
+      } catch (e) {
+        // If fetch fails, fall back to projectData.columns silently
+      } finally {
+        setIsFetchingColumns(false);
+      }
+    };
+    loadColumns();
+  }, [fileId]);
 
   const models = [
     {
       id: 'logistic_regression',
-      name: 'Logistic Regression',
-      description: 'Fast and interpretable for binary classification',
+      name: 'Logistic/Linear Regression',
+      description: 'Fast and interpretable',
       recommended: true,
       icon: Brain,
     },
@@ -66,52 +104,69 @@ export function ModelTraining({ onNavigate, projectData, updateProjectData, mark
       toast.error('Please select a model to train');
       return;
     }
+    
+    if (!targetColumn) {
+      toast.error('Please select a target column to predict');
+      return;
+    }
 
-    if (!projectData.fileName) {
-      toast.error('No data available for training');
+    if (!projectData.fileId) {
+      toast.error('No data available for training. Ensure data is uploaded.');
       return;
     }
 
     setIsTraining(true);
     setTrainingProgress(0);
+    setIsComplete(false);
+    setModelMetrics(null);
 
-    // Simulate training progress
+    // Simulate training progress for UX
     const progressInterval = setInterval(() => {
       setTrainingProgress(prev => {
-        if (prev >= 90) {
-          clearInterval(progressInterval);
-          return prev;
-        }
-        return prev + 10;
+        if (prev >= 90) return prev;
+        return prev + 8;
       });
-    }, 400);
+    }, 500);
 
     try {
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 4000));
+      const fileIdToUse = projectData.fileId;
+      
+      const response = await apiService.trainModel(
+        String(fileIdToUse),
+        selectedModel,
+        targetColumn,
+        { testSize: testSize[0] }
+      );
 
       clearInterval(progressInterval);
       setTrainingProgress(100);
 
-      // Mock metrics
-      const metrics = {
-        accuracy: 0.87 + Math.random() * 0.1,
-        precision: 0.85 + Math.random() * 0.1,
-        recall: 0.83 + Math.random() * 0.1,
-        loss: 0.15 + Math.random() * 0.05,
-      };
+      if (!response.success || !response.data) {
+          throw new Error(response.error || 'Failed to train model');
+      }
+
+      // Backend returns { success, trainingId, metrics } directly
+      const resData = response.data as any;
+      const metrics = resData.metrics;
+      const trainingId = resData.trainingId;
+
+      if (!metrics) {
+        throw new Error('No metrics returned from training. Please check your target column and data.');
+      }
 
       setModelMetrics(metrics);
       updateProjectData({
         selectedModel,
         modelMetrics: metrics,
-        trainingId: `training_${Date.now()}`,
+        trainingId,
       });
 
       setIsComplete(true);
       toast.success('Model training completed successfully!');
     } catch (error: any) {
       toast.error(error.message || 'Failed to train model');
+      clearInterval(progressInterval);
+      setTrainingProgress(0);
     } finally {
       setIsTraining(false);
     }
@@ -122,7 +177,7 @@ export function ModelTraining({ onNavigate, projectData, updateProjectData, mark
     onNavigate('visualization');
   };
 
-  const handleModelFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleModelFileUpload = (event: { target: { files?: FileList | null } }) => {
     const file = event.target.files?.[0];
     if (!file) return;
 
@@ -153,27 +208,29 @@ export function ModelTraining({ onNavigate, projectData, updateProjectData, mark
       return;
     }
 
-    if (!projectData.fileName) {
-      toast.error('No data available for training');
+    if (!targetColumn) {
+      toast.error('Please select a target column to predict with this model');
+      return;
+    }
+
+    if (!projectData.fileId && !projectData.processedFileId) {
+      toast.error('No data available for testing. Ensure data is uploaded.');
       return;
     }
 
     setIsTraining(true);
     setTrainingProgress(0);
 
-    // Simulate training progress
+    // Simulate training progress UX
     const progressInterval = setInterval(() => {
       setTrainingProgress(prev => {
-        if (prev >= 90) {
-          clearInterval(progressInterval);
-          return prev;
-        }
+        if (prev >= 90) return prev;
         return prev + 10;
       });
     }, 400);
 
     try {
-      // Simulate API call
+      // Custom uploaded models are currently mocked as backend support for loading .pkl safely requires more architecture
       await new Promise(resolve => setTimeout(resolve, 4000));
 
       clearInterval(progressInterval);
@@ -191,13 +248,13 @@ export function ModelTraining({ onNavigate, projectData, updateProjectData, mark
       updateProjectData({
         selectedModel: `custom_${uploadedModelFile.name}`,
         modelMetrics: metrics,
-        trainingId: `training_${Date.now()}`,
+        trainingId: `training_custom_${Date.now()}`,
       });
 
       setIsComplete(true);
-      toast.success('Custom model training completed successfully!');
+      toast.success('Custom model evaluation completed successfully!');
     } catch (error: any) {
-      toast.error(error.message || 'Failed to train model');
+      toast.error(error.message || 'Failed to use custom model');
     } finally {
       setIsTraining(false);
     }
@@ -357,7 +414,36 @@ export function ModelTraining({ onNavigate, projectData, updateProjectData, mark
           <CardTitle>Training Configuration</CardTitle>
           <CardDescription>Adjust training parameters</CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="space-y-6">
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <Label>Target Column (Column to Predict)</Label>
+              {isFetchingColumns && <Loader2 className="w-3 h-3 animate-spin text-gray-400" />}
+              {!isFetchingColumns && columns.length > 0 && (
+                <Badge variant="secondary" className="text-xs">{columns.length} columns loaded</Badge>
+              )}
+            </div>
+            <Select value={targetColumn} onValueChange={setTargetColumn} disabled={isTraining || isFetchingColumns}>
+              <SelectTrigger>
+                <SelectValue placeholder={isFetchingColumns ? "Loading columns..." : "Select target column..."} />
+              </SelectTrigger>
+              <SelectContent>
+                {columns && columns.length > 0 ? (
+                    columns.map((col: string) => (
+                      <SelectItem key={col} value={col}>
+                        {col}
+                      </SelectItem>
+                    ))
+                ) : (
+                    <div className="p-2 text-sm text-gray-500">
+                      {isFetchingColumns ? 'Loading...' : 'No columns available. Please upload data.'}
+                    </div>
+                )}
+              </SelectContent>
+            </Select>
+          </div>
+
+
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <Label>Test Set Size</Label>
@@ -393,7 +479,6 @@ export function ModelTraining({ onNavigate, projectData, updateProjectData, mark
         </Card>
       )}
 
-      {/* Results */}
       {isComplete && modelMetrics && (
         <Card className="border-green-200 bg-green-50/30">
           <CardHeader className="pb-3">
@@ -401,46 +486,58 @@ export function ModelTraining({ onNavigate, projectData, updateProjectData, mark
               <CheckCircle className="w-5 h-5 text-green-600" />
               <span>Training Complete</span>
             </CardTitle>
-            <CardDescription>Model performance metrics</CardDescription>
+            <CardDescription>Model performance metrics on test set ({testSize[0]}% holdout)</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div className="p-3 bg-white rounded-lg border border-green-100">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-gray-600">Accuracy</span>
-                  <TrendingUp className="w-4 h-4 text-green-600" />
+              {modelMetrics.accuracy != null && (
+                <div className="p-3 bg-white rounded-lg border border-green-100">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-gray-600">
+                      {modelMetrics.precision === 0 && modelMetrics.recall === 0 ? 'R² Score' : 'Accuracy'}
+                    </span>
+                    <TrendingUp className="w-4 h-4 text-green-600" />
+                  </div>
+                  <p className="text-gray-900 font-semibold text-lg">
+                    {(modelMetrics.accuracy * 100).toFixed(1)}%
+                  </p>
                 </div>
-                <p className="text-gray-900">
-                  {(modelMetrics.accuracy * 100).toFixed(1)}%
-                </p>
-              </div>
-              <div className="p-3 bg-white rounded-lg border border-green-100">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-gray-600">Precision</span>
-                  <TrendingUp className="w-4 h-4 text-green-600" />
+              )}
+              {modelMetrics.precision != null && modelMetrics.precision > 0 && (
+                <div className="p-3 bg-white rounded-lg border border-green-100">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-gray-600">Precision</span>
+                    <TrendingUp className="w-4 h-4 text-green-600" />
+                  </div>
+                  <p className="text-gray-900 font-semibold text-lg">
+                    {(modelMetrics.precision * 100).toFixed(1)}%
+                  </p>
                 </div>
-                <p className="text-gray-900">
-                  {(modelMetrics.precision * 100).toFixed(1)}%
-                </p>
-              </div>
-              <div className="p-3 bg-white rounded-lg border border-green-100">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-gray-600">Recall</span>
-                  <TrendingUp className="w-4 h-4 text-green-600" />
+              )}
+              {modelMetrics.recall != null && modelMetrics.recall > 0 && (
+                <div className="p-3 bg-white rounded-lg border border-green-100">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-gray-600">Recall</span>
+                    <TrendingUp className="w-4 h-4 text-green-600" />
+                  </div>
+                  <p className="text-gray-900 font-semibold text-lg">
+                    {(modelMetrics.recall * 100).toFixed(1)}%
+                  </p>
                 </div>
-                <p className="text-gray-900">
-                  {(modelMetrics.recall * 100).toFixed(1)}%
-                </p>
-              </div>
-              <div className="p-3 bg-white rounded-lg border border-green-100">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-gray-600">Loss</span>
-                  <TrendingUp className="w-4 h-4 text-green-600" />
+              )}
+              {modelMetrics.loss != null && (
+                <div className="p-3 bg-white rounded-lg border border-green-100">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-gray-600">
+                      {modelMetrics.precision === 0 && modelMetrics.recall === 0 ? 'MSE' : 'Log Loss'}
+                    </span>
+                    <TrendingUp className="w-4 h-4 text-blue-600" />
+                  </div>
+                  <p className="text-gray-900 font-semibold text-lg">
+                    {typeof modelMetrics.loss === 'number' ? modelMetrics.loss.toFixed(4) : 'N/A'}
+                  </p>
                 </div>
-                <p className="text-gray-900">
-                  {modelMetrics.loss.toFixed(3)}
-                </p>
-              </div>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -463,15 +560,17 @@ export function ModelTraining({ onNavigate, projectData, updateProjectData, mark
           Back to Preprocessing
         </Button>
         <div className="flex space-x-3">
-          {!isComplete && (
+          {/* Allow training/re-training when not currently training */}
+          {!isTraining && (
             <Button
+              variant={isComplete ? 'outline' : 'default'}
               onClick={modelSource === 'upload' ? handleTrainWithUploadedModel : handleTrain}
-              disabled={isTraining || (!selectedModel && !uploadedModelFile)}
+              disabled={isTraining || (!selectedModel && !uploadedModelFile) || !targetColumn}
             >
-              {isTraining ? (
+              {isComplete ? (
                 <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Training...
+                  <RefreshCw className="w-4 h-4 mr-2" />
+                  Train Again
                 </>
               ) : (
                 <>
@@ -479,6 +578,12 @@ export function ModelTraining({ onNavigate, projectData, updateProjectData, mark
                   {modelSource === 'upload' ? 'Use Custom Model' : 'Train Model'}
                 </>
               )}
+            </Button>
+          )}
+          {isTraining && (
+            <Button disabled>
+              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              Training...
             </Button>
           )}
           {isComplete && (

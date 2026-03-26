@@ -152,9 +152,25 @@ export function DataUpload({ onNavigate, markStepComplete, updateProjectData }: 
       return;
     }
 
+    let extractedColumns: string[] = [];
+    if (completedFile.preview) {
+      try {
+        const data = completedFile.preview;
+        if (Array.isArray(data) && data.length > 0) {
+          extractedColumns = Object.keys(data[0]);
+        } else if (typeof data === 'object' && Object.keys(data).length > 0) {
+          const firstKey = Object.keys(data)[0];
+          extractedColumns = Object.keys(data[firstKey]);
+        }
+      } catch (e) {
+        console.error('Failed to extract columns', e);
+      }
+    }
+
     updateProjectData({
       fileName: completedFile.file?.name || completedFile.name || 'dataset.csv',
       fileId: completedFile.fileId,
+      columns: extractedColumns,
     });
     markStepComplete('upload');
     onNavigate('preprocessing');

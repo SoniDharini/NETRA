@@ -46,10 +46,10 @@ export const API_ENDPOINTS = {
   GET_FEATURE_ENGINEERING_SUGGESTIONS: 'datasets/feature-engineering-suggestions/',
   
   // Model Training
-  GET_MODEL_RECOMMENDATIONS: '/models/recommendations/',
-  UPLOAD_CUSTOM_MODEL: '/models/upload/',
-  TRAIN_MODEL: '/models/train/',
-  GET_TRAINING_STATUS: '/models/training-status/',
+  GET_MODEL_RECOMMENDATIONS: 'models/recommendations/',
+  UPLOAD_CUSTOM_MODEL: 'models/upload/',
+  TRAIN_MODEL: 'datasets/train/', // Updated point to our Django app
+  GET_TRAINING_STATUS: 'models/training-status/',
   GET_MODEL_METRICS: '/models/metrics/',
   
   // Visualization

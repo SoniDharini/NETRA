@@ -19,10 +19,12 @@ export interface ProjectData {
   uploadedFile?: File;
   fileName?: string;
   fileId?: string;
+  processedFileId?: string;
   uploadId?: string;
   dataPreview?: any[];
   preprocessedData?: any[];
   preprocessingSteps?: string[];
+  columns?: string[];
   selectedModel?: string;
   trainingId?: string;
   modelMetrics?: {

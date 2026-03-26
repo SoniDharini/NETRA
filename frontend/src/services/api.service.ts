@@ -610,30 +610,33 @@ class ApiService {
     modelName: string,
     targetColumn: string,
     params: Record<string, any> = {}
-  ): Promise<ApiResponse<{ trainingId: string }>> {
+  ): Promise<ApiResponse<{ trainingId: string; metrics: any }>> {
     if (USE_MOCK_API) {
-      return mockApiService.trainModel(fileId, modelName, targetColumn, params);
+      return mockApiService.trainModel(fileId, modelName, targetColumn, params) as any;
     }
 
     try {
-      const token = localStorage.getItem('accessToken');
-      const response = await this.fetchWithTimeout(
-        `${this.baseUrl}${API_ENDPOINTS.TRAIN_MODEL}`,
-        {
-          method: 'POST',
-          headers: { 
-            'Content-Type': 'application/json',
-            'Authorization': token ? `Bearer ${token}` : '',
-          },
-          body: JSON.stringify({ fileId, modelName, targetColumn, params }),
-        }
+      // ML training can be slow — use a 5-minute timeout
+      const trainTimeout = 300000;
+      const response = await api.post(
+        API_ENDPOINTS.TRAIN_MODEL,
+        { datasetId: fileId, modelName, targetColumn, ...params },
+        { timeout: trainTimeout }
       );
-
-      return this.handleResponse(response);
+      // Backend returns { success, trainingId, metrics } directly (no wrapping 'data' key)
+      const resData = response.data;
+      return {
+        success: true,
+        data: resData,
+      };
     } catch (error: any) {
+      const msg = error.response?.data?.error || error.message || 'Failed to start model training';
+      const isTimeout = error.code === 'ECONNABORTED' || msg?.toLowerCase?.().includes('timeout');
       return {
         success: false,
-        error: error.message || 'Failed to start model training',
+        error: isTimeout
+          ? 'Training timed out. The model may be too complex for the data. Try a simpler model or reduce test size.'
+          : msg,
       };
     }
   }
