@@ -139,6 +139,7 @@ export function Visualization({ onNavigate, projectData, updateProjectData, mark
   const [showSuggestions, setShowSuggestions] = useState(true);
   const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
   const [lastAppliedSuggestion, setLastAppliedSuggestion] = useState<any>(null);
+  const [latestNlqResult, setLatestNlqResult] = useState<{ query: string; output: string } | null>(null);
   const [chartData, setChartData] = useState<{ histogram: any; bar_chart: any; correlation: any } | null>(null);
   const [filterConfig, setFilterConfig] = useState<FilterConfig>({ mode: 'none' });
   const [calculatedMetrics, setCalculatedMetrics] = useState<CalculatedMetric[]>([]);
@@ -864,15 +865,22 @@ export function Visualization({ onNavigate, projectData, updateProjectData, mark
       toast.success('Visualization generated from your query!');
       
       // Auto-configure based on query keywords
+      let resolvedChartType = chartType;
       if (query.toLowerCase().includes('trend') || query.toLowerCase().includes('over time')) {
-        setChartType('line');
+        resolvedChartType = 'line';
       } else if (query.toLowerCase().includes('compare') || query.toLowerCase().includes('by')) {
-        setChartType('bar');
+        resolvedChartType = 'bar';
       } else if (query.toLowerCase().includes('distribution')) {
-        setChartType('histogram');
+        resolvedChartType = 'histogram';
       } else if (query.toLowerCase().includes('correlation')) {
-        setChartType('scatter');
+        resolvedChartType = 'scatter';
       }
+      setChartType(resolvedChartType);
+
+      setLatestNlqResult({
+        query,
+        output: `Generated a ${resolvedChartType} visualization for: "${query}".`,
+      });
       
       // Switch to worksheet view to show the result
       setActiveMode('worksheet');
@@ -1034,6 +1042,7 @@ export function Visualization({ onNavigate, projectData, updateProjectData, mark
                 <NLQPanel 
                   onQuerySubmit={handleNLQSubmit}
                   isProcessing={isLoading}
+                  latestResult={latestNlqResult}
                 />
               </div>
             )}

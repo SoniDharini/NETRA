@@ -10,7 +10,6 @@ import { toast } from 'sonner';
 import { ProjectData } from '../App';
 import { apiService, PreprocessingSuggestion, FeatureEngineeringSuggestion } from '../services/api.service';
 import { mockApiService } from '../services/mock-api.service';
-import { NLQBar } from './NLQBar';
 import { useData } from '../contexts/DataContext';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 
@@ -108,7 +107,8 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
     ensureDatasetId();
   }, [projectData.fileId, latestFromContext?.fileId]);
 
-  const effectiveFileId = resolvedDatasetId ?? latestFromContext?.fileId ?? projectData.fileId;
+  // Prefer the current upload flow's dataset first, backend lookup remains fallback.
+  const effectiveFileId = projectData.fileId ?? latestFromContext?.fileId ?? resolvedDatasetId;
   const activeFile = effectiveFileId
     ? files.find(
       (f) => (f.status === 'completed' || f.status === 'success') && String(f.fileId) === String(effectiveFileId)
@@ -153,15 +153,15 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
           apiService.getPreprocessingSuggestions(String(effectiveFileId)),
           apiService.getFeatureEngineeringSuggestions(String(effectiveFileId)),
         ]);
-        // Fallback: try combined profile endpoint when individual endpoints fail
-        if (!prepResponse.success || !feResponse.success) {
+        // Fallback: try combined profile endpoint when individual endpoints fail or return empty arrays.
+        if (!prepResponse.success || !feResponse.success || !prepResponse.data?.length || !feResponse.data?.length) {
           const fullRes = await apiService.getDatasetProfileFull(String(effectiveFileId));
           if (fullRes.success && fullRes.data) {
             const d = fullRes.data as any;
-            if (!prepResponse.success && Array.isArray(d.suggested_cleaning)) {
+            if ((!prepResponse.success || !prepResponse.data?.length) && Array.isArray(d.suggested_cleaning)) {
               prepResponse = { success: true, data: d.suggested_cleaning };
             }
-            if (!feResponse.success && Array.isArray(d.feature_engineering)) {
+            if ((!feResponse.success || !feResponse.data?.length) && Array.isArray(d.feature_engineering)) {
               feResponse = { success: true, data: d.feature_engineering };
             }
           }
@@ -307,6 +307,7 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
     }
 
     setIsProcessing(true);
+    setIsComplete(false);
     setProcessingProgress(0);
     const progressInterval = setInterval(() => setProcessingProgress(p => Math.min(p + 10, 90)), 300);
 
@@ -655,7 +656,7 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
 
       <div className="flex flex-wrap justify-between gap-2 pt-2">
         <Button variant="outline" onClick={() => onNavigate('upload')}>Back to Upload</Button>
-        <Button onClick={handleProcess} disabled={isProcessing || isComplete}>
+        <Button onClick={handleProcess} disabled={isProcessing}>
           {isProcessing ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Processing...</> : 'Apply Preprocessing'}
         </Button>
         {isComplete && (

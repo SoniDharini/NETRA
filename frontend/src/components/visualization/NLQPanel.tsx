@@ -10,6 +10,7 @@ import { toast } from 'sonner@2.0.3';
 interface NLQPanelProps {
   onQuerySubmit: (query: string) => void;
   isProcessing?: boolean;
+  latestResult?: { query: string; output: string } | null;
 }
 
 interface QuerySuggestion {
@@ -28,7 +29,7 @@ const QUERY_SUGGESTIONS: QuerySuggestion[] = [
   { text: 'Monthly sales growth', category: 'trend' },
 ];
 
-export function NLQPanel({ onQuerySubmit, isProcessing = false }: NLQPanelProps) {
+export function NLQPanel({ onQuerySubmit, isProcessing = false, latestResult = null }: NLQPanelProps) {
   const [query, setQuery] = useState('');
   const [queryHistory, setQueryHistory] = useState<string[]>([]);
 
@@ -151,6 +152,24 @@ export function NLQPanel({ onQuerySubmit, isProcessing = false }: NLQPanelProps)
                 ))}
               </div>
             </ScrollArea>
+          </CardContent>
+        </Card>
+      )}
+
+      {latestResult && (
+        <Card className="border-emerald-200 bg-emerald-50/30">
+          <CardHeader className="pb-3">
+            <CardTitle>Latest NLQ Result</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <div>
+              <p className="text-xs text-emerald-700 uppercase tracking-wide">Query</p>
+              <p className="text-sm text-gray-900">{latestResult.query}</p>
+            </div>
+            <div>
+              <p className="text-xs text-emerald-700 uppercase tracking-wide">Output</p>
+              <p className="text-sm text-gray-900">{latestResult.output}</p>
+            </div>
           </CardContent>
         </Card>
       )}

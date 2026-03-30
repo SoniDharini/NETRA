@@ -14,6 +14,8 @@ import { ProjectData } from '../App';
 import { NLQBar } from './NLQBar';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { apiService } from '../services/api.service';
+import { analyzeDataset, DatasetAnalysis } from '../utils/datasetAnalyzer';
+import { suggestBestModel, predictPerformance, ModelSuggestion, PredictedPerformance } from '../utils/modelAdvisor';
 
 interface ModelTrainingProps {
   onNavigate: (section: any) => void;
@@ -34,6 +36,11 @@ export function ModelTraining({ onNavigate, projectData, updateProjectData, mark
   const [modelSource, setModelSource] = useState<'builtin' | 'upload'>('builtin');
   const [fetchedColumns, setFetchedColumns] = useState<string[]>([]);
   const [isFetchingColumns, setIsFetchingColumns] = useState(false);
+  const [sampledRows, setSampledRows] = useState<any[]>([]);
+  const [datasetAnalysis, setDatasetAnalysis] = useState<DatasetAnalysis | null>(null);
+  const [suggestedModel, setSuggestedModel] = useState<ModelSuggestion | null>(null);
+  const [predictedPerformance, setPredictedPerformance] = useState<PredictedPerformance | null>(null);
+  const [trainingGuardMessage, setTrainingGuardMessage] = useState<string>('');
   
   // Available columns: prefer live-fetched over projectData (which may be pre-preprocessing)
   const columns = fetchedColumns.length > 0
@@ -42,6 +49,9 @@ export function ModelTraining({ onNavigate, projectData, updateProjectData, mark
 
 
   const fileId = projectData.fileId;
+  const isPreprocessingReady =
+    projectData.completedSteps?.has('preprocessing') ||
+    (projectData.preprocessingSteps != null && projectData.preprocessingSteps.length > 0);
 
   // Fetch columns from backend when we have a fileId but no/stale columns
   useEffect(() => {
@@ -59,6 +69,15 @@ export function ModelTraining({ onNavigate, projectData, updateProjectData, mark
             updateProjectData({ columns: cols });
           }
         }
+        // Load a larger sample for analysis/suggestion. Keep existing flow untouched.
+        const sampleRes = await apiService.getDataPreview(String(fileId), 200);
+        if (sampleRes.success && sampleRes.data) {
+          const sampleData = sampleRes.data as any;
+          const rows = sampleData.rows ?? sampleData.data?.rows ?? [];
+          if (Array.isArray(rows)) {
+            setSampledRows(rows);
+          }
+        }
       } catch (e) {
         // If fetch fails, fall back to projectData.columns silently
       } finally {
@@ -67,6 +86,23 @@ export function ModelTraining({ onNavigate, projectData, updateProjectData, mark
     };
     loadColumns();
   }, [fileId]);
+
+  useEffect(() => {
+    if (!targetColumn || !columns.length || !sampledRows.length) {
+      setDatasetAnalysis(null);
+      setSuggestedModel(null);
+      setPredictedPerformance(null);
+      return;
+    }
+
+    const analysis = analyzeDataset(sampledRows, columns, targetColumn);
+    const suggestion = suggestBestModel(analysis);
+    const prediction = predictPerformance(analysis, selectedModel || suggestion.modelId);
+
+    setDatasetAnalysis(analysis);
+    setSuggestedModel(suggestion);
+    setPredictedPerformance(prediction);
+  }, [targetColumn, columns, sampledRows, selectedModel]);
 
   const models = [
     {
@@ -100,6 +136,8 @@ export function ModelTraining({ onNavigate, projectData, updateProjectData, mark
   ];
 
   const handleTrain = async () => {
+    setTrainingGuardMessage('');
+
     if (!selectedModel) {
       toast.error('Please select a model to train');
       return;
@@ -112,6 +150,27 @@ export function ModelTraining({ onNavigate, projectData, updateProjectData, mark
 
     if (!projectData.fileId) {
       toast.error('No data available for training. Ensure data is uploaded.');
+      return;
+    }
+
+    if (!isPreprocessingReady) {
+      const msg = 'Please complete preprocessing before training to ensure compatible model input.';
+      setTrainingGuardMessage(msg);
+      toast.error(msg);
+      return;
+    }
+
+    if (!sampledRows.length) {
+      const msg = 'Dataset preview is empty or invalid. Please verify preprocessing output and try again.';
+      setTrainingGuardMessage(msg);
+      toast.error(msg);
+      return;
+    }
+
+    if (datasetAnalysis?.problemType === 'regression' && datasetAnalysis.invalidNumericLikeColumns.includes(targetColumn)) {
+      const msg = `Target column "${targetColumn}" contains formatted numeric values (e.g., commas/currency). Please clean numeric formatting in preprocessing and retry.`;
+      setTrainingGuardMessage(msg);
+      toast.error(msg);
       return;
     }
 
@@ -203,6 +262,8 @@ export function ModelTraining({ onNavigate, projectData, updateProjectData, mark
   };
 
   const handleTrainWithUploadedModel = async () => {
+    setTrainingGuardMessage('');
+
     if (!uploadedModelFile) {
       toast.error('Please upload a model file');
       return;
@@ -215,6 +276,20 @@ export function ModelTraining({ onNavigate, projectData, updateProjectData, mark
 
     if (!projectData.fileId && !projectData.processedFileId) {
       toast.error('No data available for testing. Ensure data is uploaded.');
+      return;
+    }
+
+    if (!isPreprocessingReady) {
+      const msg = 'Please complete preprocessing before evaluating a custom model.';
+      setTrainingGuardMessage(msg);
+      toast.error(msg);
+      return;
+    }
+
+    if (!sampledRows.length) {
+      const msg = 'Dataset preview is empty or invalid. Please verify preprocessing output and try again.';
+      setTrainingGuardMessage(msg);
+      toast.error(msg);
       return;
     }
 
@@ -285,6 +360,20 @@ export function ModelTraining({ onNavigate, projectData, updateProjectData, mark
         <h1 className="text-gray-900 mb-1">Model Training</h1>
         <p className="text-gray-600">Select and train a machine learning model</p>
       </div>
+
+      {!isPreprocessingReady && (
+        <Alert>
+          <AlertDescription>
+            Preprocessing is not marked complete yet. Training is available after preprocessing to ensure clean model-ready data.
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {trainingGuardMessage && (
+        <Alert variant="destructive">
+          <AlertDescription>{trainingGuardMessage}</AlertDescription>
+        </Alert>
+      )}
 
       {/* Model Selection */}
       <Card>
@@ -464,6 +553,55 @@ export function ModelTraining({ onNavigate, projectData, updateProjectData, mark
         </CardContent>
       </Card>
 
+      {(datasetAnalysis || suggestedModel || predictedPerformance) && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle>Training Intelligence</CardTitle>
+            <CardDescription>Auto-analysis and model recommendation based on preprocessed data sample</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {datasetAnalysis && (
+              <div className="flex flex-wrap gap-2">
+                <Badge variant="secondary">Dataset Type: {datasetAnalysis.problemType === 'classification' ? 'Classification' : 'Regression'}</Badge>
+                <Badge variant="outline">Target Type: {datasetAnalysis.targetType}</Badge>
+                <Badge variant="outline">Features: {datasetAnalysis.featureCount}</Badge>
+                <Badge variant="outline">Dataset Size: {datasetAnalysis.datasetSize}</Badge>
+              </div>
+            )}
+
+            {suggestedModel && (
+              <div className="p-3 rounded-lg border bg-blue-50/40">
+                <p className="text-gray-900 font-medium">Suggested Model: {suggestedModel.label}</p>
+                <p className="text-gray-600 mt-1">{suggestedModel.reason}</p>
+                <div className="mt-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setSelectedModel(suggestedModel.modelId)}
+                    disabled={isTraining}
+                  >
+                    Use Suggested Model
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {predictedPerformance && (
+              <div className="p-3 rounded-lg border bg-purple-50/40">
+                <p className="text-gray-900 font-medium">Model Accuracy / Performance (Estimated)</p>
+                <p className="text-gray-600 mt-1">{predictedPerformance.summary}</p>
+                <div className="mt-2 space-y-1">
+                  {predictedPerformance.metrics.map((metric, idx) => (
+                    <p key={idx} className="text-gray-700">{metric}</p>
+                  ))}
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Training Progress */}
       {isTraining && (
         <Card>
@@ -535,6 +673,28 @@ export function ModelTraining({ onNavigate, projectData, updateProjectData, mark
                   </div>
                   <p className="text-gray-900 font-semibold text-lg">
                     {typeof modelMetrics.loss === 'number' ? modelMetrics.loss.toFixed(4) : 'N/A'}
+                  </p>
+                </div>
+              )}
+              {modelMetrics.precision === 0 && modelMetrics.recall === 0 && modelMetrics.loss != null && (
+                <div className="p-3 bg-white rounded-lg border border-green-100">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-gray-600">RMSE</span>
+                    <TrendingUp className="w-4 h-4 text-blue-600" />
+                  </div>
+                  <p className="text-gray-900 font-semibold text-lg">
+                    {Math.sqrt(Math.max(0, Number(modelMetrics.loss))).toFixed(4)}
+                  </p>
+                </div>
+              )}
+              {modelMetrics.precision === 0 && modelMetrics.recall === 0 && (
+                <div className="p-3 bg-white rounded-lg border border-green-100">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-gray-600">MAE</span>
+                    <TrendingUp className="w-4 h-4 text-blue-600" />
+                  </div>
+                  <p className="text-gray-900 font-semibold text-lg">
+                    {modelMetrics.mae != null ? Number(modelMetrics.mae).toFixed(4) : 'N/A'}
                   </p>
                 </div>
               )}
