@@ -1105,3 +1105,142 @@ def get_saved_visualizations(request, dataset_id):
         })
     except Dataset.DoesNotExist:
         return Response({'error': 'Dataset not found'}, status=status.HTTP_404_NOT_FOUND)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def process_nlq_view(request):
+    """
+    Process Natural Language Query using Groq AI.
+    """
+    file_id = request.data.get('fileId')
+    query = request.data.get('query')
+    
+    if not file_id or not query:
+        return Response({'error': 'fileId and query are required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+    try:
+        dataset = Dataset.objects.get(id=file_id, user=request.user)
+        
+        # Resolve dataset file
+        file_path = None
+        if dataset.metadata.get('processed_file_path') and os.path.exists(dataset.metadata['processed_file_path']):
+            file_path = dataset.metadata['processed_file_path']
+        if not file_path and dataset.file:
+            file_path = dataset.file.path
+            
+        if not file_path or not os.path.exists(file_path):
+            return Response({'error': 'Dataset file not found on disk'}, status=status.HTTP_404_NOT_FOUND)
+            
+        df = _get_preprocessing_service().load_dataset(file_path)
+        
+        from datasets.ai_service import process_nlq
+        try:
+            result = process_nlq(df, query)
+            
+            # Map the response into the format Visualization components expect
+            mapped_result = {
+                "interpretation": result.get("interpretation", "Here is your visualization based on the query."),
+                "visualization": {
+                    "chartType": result.get("chartType", "bar"),
+                    "config": result.get("chartConfig", {})
+                }
+            }
+            return Response({
+                'success': True,
+                'data': mapped_result
+            })
+        except Exception as ai_err:
+            return Response({'error': f"AI processing failed: {str(ai_err)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+    except Dataset.DoesNotExist:
+        return Response({'error': 'Dataset not found'}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def get_model_recommendations_view(request):
+    """
+    Get AI-driven Model Recommendations using Groq.
+    """
+    file_id = request.data.get('fileId')
+    if not file_id:
+        return Response({'error': 'fileId is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+    try:
+        dataset = Dataset.objects.get(id=file_id, user=request.user)
+        
+        file_path = None
+        if dataset.metadata.get('processed_file_path') and os.path.exists(dataset.metadata['processed_file_path']):
+            file_path = dataset.metadata['processed_file_path']
+        if not file_path and dataset.file:
+            file_path = dataset.file.path
+            
+        if not file_path or not os.path.exists(file_path):
+            return Response({'error': 'Dataset file not found'}, status=status.HTTP_404_NOT_FOUND)
+            
+        df = _get_preprocessing_service().load_dataset(file_path)
+        
+        from datasets.ai_service import get_model_recommendations
+        recommendations = get_model_recommendations(df)
+        
+        return Response({
+            'success': True,
+            'data': recommendations
+        })
+    except Dataset.DoesNotExist:
+        return Response({'error': 'Dataset not found'}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def process_model_nlq_view(request):
+    """
+    POST /api/datasets/model-nlq/
+    Process NLQ in the context of model training — returns analytical insights,
+    not a chart config.
+    """
+    file_id = request.data.get('fileId')
+    query = request.data.get('query')
+    model_name = request.data.get('modelName')
+    metrics = request.data.get('metrics')
+
+    if not file_id or not query:
+        return Response({'error': 'fileId and query are required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        dataset = Dataset.objects.get(id=file_id, user=request.user)
+
+        # Prefer processed file
+        file_path = None
+        if dataset.metadata.get('processed_file_path') and os.path.exists(dataset.metadata['processed_file_path']):
+            file_path = dataset.metadata['processed_file_path']
+        if not file_path and dataset.file:
+            try:
+                file_path = dataset.file.path
+            except (ValueError, AttributeError):
+                pass
+
+        if not file_path or not os.path.exists(file_path):
+            return Response({'error': 'Dataset file not found on disk'}, status=status.HTTP_404_NOT_FOUND)
+
+        df = _get_preprocessing_service().load_dataset(file_path)
+
+        from datasets.ai_service import process_model_nlq
+        result = process_model_nlq(df, query, model_name=model_name, metrics=metrics)
+
+        return Response({
+            'success': True,
+            'data': result
+        })
+    except Dataset.DoesNotExist:
+        return Response({'error': 'Dataset not found'}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

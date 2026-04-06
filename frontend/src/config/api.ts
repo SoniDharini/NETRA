@@ -46,18 +46,19 @@ export const API_ENDPOINTS = {
   GET_FEATURE_ENGINEERING_SUGGESTIONS: 'datasets/feature-engineering-suggestions/',
   
   // Model Training
-  GET_MODEL_RECOMMENDATIONS: 'models/recommendations/',
+  GET_MODEL_RECOMMENDATIONS: 'datasets/model-recommendations/',
   UPLOAD_CUSTOM_MODEL: 'models/upload/',
-  TRAIN_MODEL: 'datasets/train/', // Updated point to our Django app
+  TRAIN_MODEL: 'datasets/train/',
   GET_TRAINING_STATUS: 'models/training-status/',
   GET_MODEL_METRICS: '/models/metrics/',
+  MODEL_NLQ: 'datasets/model-nlq/',
   
   // Visualization
   GET_VISUALIZATION_SUGGESTIONS: 'datasets/visualization-suggestions/',
   SAVE_VISUALIZATION: 'datasets/save-visualization/',
   GET_SAVED_VISUALIZATIONS: 'datasets/saved-visualizations/',
   GENERATE_VISUALIZATION: 'visualizations/generate',
-  PROCESS_NLQ: 'visualizations/nlq',
+  PROCESS_NLQ: 'datasets/nlq/',
   
   // Report Generation
   GENERATE_REPORT: '/reports/generate',

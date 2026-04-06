@@ -783,6 +783,30 @@ class ApiService {
     }
   }
 
+  /**
+   * Process NLQ in model training context — returns analytical insights, not charts
+   */
+  async processModelNLQ(
+    fileId: string,
+    query: string,
+    modelName?: string,
+    metrics?: any
+  ): Promise<ApiResponse<{ answer: string; insights: string[]; recommendation: string }>> {
+    try {
+      const response = await api.post(
+        (API_ENDPOINTS as any).MODEL_NLQ || 'datasets/model-nlq/',
+        { fileId, query, modelName, metrics }
+      );
+      const data = response.data?.data ?? response.data;
+      return { success: true, data };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.response?.data?.error || error.message || 'Failed to process model NLQ',
+      };
+    }
+  }
+
   // ==================== REPORT GENERATION ENDPOINTS ====================
 
   /**

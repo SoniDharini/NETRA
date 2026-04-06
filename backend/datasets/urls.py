@@ -19,7 +19,10 @@ from .views import (
     get_visualization_suggestions,
     save_visualization,
     get_saved_visualizations,
-    train_model
+    train_model,
+    process_nlq_view,
+    get_model_recommendations_view,
+    process_model_nlq_view
 )
 
 router = DefaultRouter()
@@ -53,4 +56,9 @@ urlpatterns = [
 
     # ML Training
     path('train/', train_model, name='train-model'),
+
+    # AI / NLQ
+    path('nlq/', process_nlq_view, name='process-nlq'),
+    path('model-nlq/', process_model_nlq_view, name='process-model-nlq'),
+    path('model-recommendations/', get_model_recommendations_view, name='model-recommendations'),
 ]

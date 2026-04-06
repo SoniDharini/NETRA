@@ -6,18 +6,22 @@ import { Input } from './ui/input';
 import { Badge } from './ui/badge';
 import { toast } from 'sonner@2.0.3';
 
+import { apiService } from '../services/api.service';
+
 interface NLQBarProps {
   onQuery?: (query: string, response: string) => void;
   placeholder?: string;
   suggestions?: string[];
   context?: string; // 'preprocessing', 'training', 'visualization', 'report'
+  fileId?: string;
 }
 
 export function NLQBar({ 
   onQuery, 
   placeholder = 'Ask anything about your data...',
   suggestions = [],
-  context = 'general'
+  context = 'general',
+  fileId
 }: NLQBarProps) {
   const [query, setQuery] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -60,36 +64,35 @@ export function NLQBar({
 
     setIsProcessing(true);
 
-    // Simulate AI processing
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    try {
+      let responseText = '';
+      if (fileId) {
+        const res = await apiService.processNLQ(fileId, query);
+        if (res.success && res.data) {
+          responseText = res.data.interpretation || 'No response generated.';
+          toast.success('Query processed successfully');
+        } else {
+          responseText = res.error || 'Failed to process query on the server.';
+          toast.error('Query processing failed');
+        }
+      } else {
+        responseText = "No dataset file selected to query against.";
+        toast.error('No dataset selected');
+      }
 
-    // Generate a mock response based on the query
-    const response = generateMockResponse(query, context);
-    
-    setIsProcessing(false);
-    toast.success('Query processed successfully');
-    
-    if (onQuery) {
-      onQuery(query, response);
+      if (onQuery) {
+        onQuery(query, responseText);
+      }
+    } catch (error: any) {
+      toast.error('Query processing failed.');
+    } finally {
+      setIsProcessing(false);
+      setQuery('');
     }
-
-    setQuery('');
   };
 
   const handleSuggestionClick = (suggestion: string) => {
     setQuery(suggestion);
-  };
-
-  const generateMockResponse = (query: string, ctx: string): string => {
-    const responses: Record<string, string> = {
-      preprocessing: `Based on your data preprocessing, I found that ${query.toLowerCase()} can be addressed by applying the recommended cleaning steps. Consider handling missing values and removing outliers for better results.`,
-      training: `For your model training query about "${query}", I recommend monitoring your validation metrics and considering cross-validation to ensure robust performance.`,
-      visualization: `To visualize "${query}", I've identified relevant data points and suggest using an appropriate chart type to highlight the relationships in your dataset.`,
-      report: `Regarding "${query}", the key insights from your analysis show strong patterns in the data with significant correlations between main features.`,
-      general: `I've analyzed your query "${query}". The data shows interesting patterns that could benefit from further exploration in the visualization stage.`
-    };
-
-    return responses[ctx] || responses.general;
   };
 
   return (

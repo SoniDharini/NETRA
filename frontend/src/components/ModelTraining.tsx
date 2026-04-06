@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Brain, Upload, ArrowRight, Loader2, CheckCircle, TrendingUp, FileUp, X, RefreshCw } from 'lucide-react';
+import { Brain, Upload, ArrowRight, Loader2, CheckCircle, TrendingUp, FileUp, X, RefreshCw, Sparkles, Send, Lightbulb } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
@@ -7,11 +7,11 @@ import { Alert, AlertDescription } from './ui/alert';
 import { Progress } from './ui/progress';
 import { Slider } from './ui/slider';
 import { Label } from './ui/label';
+import { Input } from './ui/input';
 import { RadioGroup, RadioGroupItem } from './ui/radio-group';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { toast } from 'sonner';
 import { ProjectData } from '../App';
-import { NLQBar } from './NLQBar';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { apiService } from '../services/api.service';
 import { analyzeDataset, DatasetAnalysis } from '../utils/datasetAnalyzer';
@@ -41,6 +41,10 @@ export function ModelTraining({ onNavigate, projectData, updateProjectData, mark
   const [suggestedModel, setSuggestedModel] = useState<ModelSuggestion | null>(null);
   const [predictedPerformance, setPredictedPerformance] = useState<PredictedPerformance | null>(null);
   const [trainingGuardMessage, setTrainingGuardMessage] = useState<string>('');
+  const [nlqQuery, setNlqQuery] = useState('');
+  const [nlqResult, setNlqResult] = useState<{ answer: string; insights: string[]; recommendation: string } | null>(null);
+  const [isNlqProcessing, setIsNlqProcessing] = useState(false);
+  const [nlqHistory, setNlqHistory] = useState<Array<{ query: string; result: { answer: string; insights: string[]; recommendation: string } }>>([]);
   
   // Available columns: prefer live-fetched over projectData (which may be pre-preprocessing)
   const columns = fetchedColumns.length > 0
@@ -96,13 +100,35 @@ export function ModelTraining({ onNavigate, projectData, updateProjectData, mark
     }
 
     const analysis = analyzeDataset(sampledRows, columns, targetColumn);
-    const suggestion = suggestBestModel(analysis);
-    const prediction = predictPerformance(analysis, selectedModel || suggestion.modelId);
+    const prediction = predictPerformance(analysis, selectedModel || 'logistic_regression');
 
     setDatasetAnalysis(analysis);
-    setSuggestedModel(suggestion);
     setPredictedPerformance(prediction);
-  }, [targetColumn, columns, sampledRows, selectedModel]);
+
+    // Fetch AI recommendations
+    const fetchAIRecommendations = async () => {
+      try {
+        if (projectData.fileId) {
+          const res = await apiService.getModelRecommendations(projectData.fileId);
+          if (res.success && res.data && res.data.length > 0) {
+            const bestRec = res.data.find((r: any) => r.recommended) || res.data[0];
+            setSuggestedModel({
+              modelId: bestRec.name,
+              label: bestRec.name,
+              reason: bestRec.description
+            });
+          } else {
+             // Fallback
+             setSuggestedModel(suggestBestModel(analysis));
+          }
+        }
+      } catch (err) {
+         setSuggestedModel(suggestBestModel(analysis));
+      }
+    };
+    fetchAIRecommendations();
+
+  }, [targetColumn, columns, sampledRows, selectedModel, projectData.fileId]);
 
   const models = [
     {
@@ -703,15 +729,159 @@ export function ModelTraining({ onNavigate, projectData, updateProjectData, mark
         </Card>
       )}
 
-      {/* Natural Language Query - Show after training is complete */}
+      {/* AI Assistant Panel - Model Training NLQ */}
       {isComplete && (
-        <NLQBar
-          context="model_training"
-          placeholder="Ask about your model's performance..."
-          onQuery={(query, response) => {
-            toast.info(response);
-          }}
-        />
+        <Card className="border-purple-200 bg-gradient-to-br from-purple-50/60 to-blue-50/40">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center space-x-2">
+              <div className="w-8 h-8 bg-gradient-to-br from-purple-500 to-blue-500 rounded-lg flex items-center justify-center">
+                <Sparkles className="w-4 h-4 text-white" />
+              </div>
+              <span>AI Model Assistant</span>
+            </CardTitle>
+            <CardDescription>Ask anything about your model's performance, data patterns, or next steps</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {/* Quick suggestions */}
+            <div className="flex flex-wrap gap-2">
+              {[
+                'Why is my R² score low?',
+                'Which features matter most?',
+                'How can I improve accuracy?',
+                'Is my model overfitting?',
+                'What does the MSE mean?',
+              ].map((suggestion) => (
+                <Badge
+                  key={suggestion}
+                  variant="secondary"
+                  className="cursor-pointer hover:bg-purple-100 transition-colors text-xs"
+                  onClick={() => setNlqQuery(suggestion)}
+                >
+                  {suggestion}
+                </Badge>
+              ))}
+            </div>
+
+            {/* Input */}
+            <div className="flex space-x-2">
+              <Input
+                value={nlqQuery}
+                onChange={(e) => setNlqQuery(e.target.value)}
+                placeholder="Ask about your model's performance..."
+                disabled={isNlqProcessing}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && nlqQuery.trim() && !isNlqProcessing) {
+                    (async () => {
+                      if (!projectData.fileId || !nlqQuery.trim()) return;
+                      setIsNlqProcessing(true);
+                      try {
+                        const res = await apiService.processModelNLQ(
+                          String(projectData.fileId),
+                          nlqQuery,
+                          selectedModel || undefined,
+                          modelMetrics || undefined
+                        );
+                        if (res.success && res.data) {
+                          const r = res.data as any;
+                          const resultObj = { answer: r.answer || '', insights: r.insights || [], recommendation: r.recommendation || '' };
+                          setNlqResult(resultObj);
+                          setNlqHistory(prev => [{ query: nlqQuery, result: resultObj }, ...prev].slice(0, 5));
+                          toast.success('AI response ready');
+                        } else {
+                          toast.error(res.error || 'Failed to get AI response');
+                        }
+                      } catch {
+                        toast.error('Failed to process query');
+                      } finally {
+                        setIsNlqProcessing(false);
+                        setNlqQuery('');
+                      }
+                    })();
+                  }
+                }}
+              />
+              <Button
+                disabled={isNlqProcessing || !nlqQuery.trim()}
+                onClick={async () => {
+                  if (!projectData.fileId || !nlqQuery.trim()) return;
+                  setIsNlqProcessing(true);
+                  try {
+                    const res = await apiService.processModelNLQ(
+                      String(projectData.fileId),
+                      nlqQuery,
+                      selectedModel || undefined,
+                      modelMetrics || undefined
+                    );
+                    if (res.success && res.data) {
+                      const r = res.data as any;
+                      const resultObj = { answer: r.answer || '', insights: r.insights || [], recommendation: r.recommendation || '' };
+                      setNlqResult(resultObj);
+                      setNlqHistory(prev => [{ query: nlqQuery, result: resultObj }, ...prev].slice(0, 5));
+                      toast.success('AI response ready');
+                    } else {
+                      toast.error(res.error || 'Failed to get AI response');
+                    }
+                  } catch {
+                    toast.error('Failed to process query');
+                  } finally {
+                    setIsNlqProcessing(false);
+                    setNlqQuery('');
+                  }
+                }}
+              >
+                {isNlqProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+              </Button>
+            </div>
+
+            {/* Latest result */}
+            {nlqResult && (
+              <div className="space-y-3">
+                <div className="p-4 bg-white rounded-lg border border-purple-100 shadow-sm">
+                  <p className="text-sm font-medium text-purple-700 mb-1">AI Answer</p>
+                  <p className="text-gray-800">{nlqResult.answer}</p>
+                </div>
+                {nlqResult.insights.length > 0 && (
+                  <div className="p-4 bg-white rounded-lg border border-blue-100 shadow-sm">
+                    <p className="text-sm font-medium text-blue-700 mb-2 flex items-center gap-1">
+                      <Lightbulb className="w-3.5 h-3.5" /> Key Insights
+                    </p>
+                    <ul className="space-y-1">
+                      {nlqResult.insights.map((insight, i) => (
+                        <li key={i} className="text-sm text-gray-700 flex items-start gap-2">
+                          <span className="text-blue-400 mt-0.5">•</span> {insight}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {nlqResult.recommendation && (
+                  <Alert className="border-green-200 bg-green-50">
+                    <TrendingUp className="w-4 h-4 text-green-600" />
+                    <AlertDescription className="text-green-800">
+                      <span className="font-medium">Recommendation: </span>{nlqResult.recommendation}
+                    </AlertDescription>
+                  </Alert>
+                )}
+              </div>
+            )}
+
+            {/* Query history */}
+            {nlqHistory.length > 1 && (
+              <div className="space-y-2">
+                <p className="text-xs text-gray-500 uppercase tracking-wide">Previous Questions</p>
+                {nlqHistory.slice(1).map((item, i) => (
+                  <div
+                    key={i}
+                    className="p-2 bg-white rounded border cursor-pointer hover:border-purple-300 transition-colors"
+                    onClick={() => setNlqResult(item.result)}
+                  >
+                    <p className="text-xs text-gray-600 truncate">{item.query}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
       )}
 
       {/* Action Buttons */}

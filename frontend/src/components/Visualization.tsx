@@ -854,37 +854,86 @@ export function Visualization({ onNavigate, projectData, updateProjectData, mark
 
   const handleNLQSubmit = async (query: string) => {
     setIsLoading(true);
-    toast.info(`Processing: "${query}"`);
     
-    // In a real implementation, this would call the NLQ API
-    // const response = await apiService.processNLQ(projectData.fileId!, query);
-    
-    // Simulate processing
-    setTimeout(() => {
-      setIsLoading(false);
-      toast.success('Visualization generated from your query!');
-      
-      // Auto-configure based on query keywords
+    try {
       let resolvedChartType = chartType;
-      if (query.toLowerCase().includes('trend') || query.toLowerCase().includes('over time')) {
-        resolvedChartType = 'line';
-      } else if (query.toLowerCase().includes('compare') || query.toLowerCase().includes('by')) {
-        resolvedChartType = 'bar';
-      } else if (query.toLowerCase().includes('distribution')) {
-        resolvedChartType = 'histogram';
-      } else if (query.toLowerCase().includes('correlation')) {
-        resolvedChartType = 'scatter';
+      let interpretation = `Generated visualization for: "${query}".`;
+      let backendConfig = null;
+
+      const effectiveFileId = fileId || (projectData as any).fileId;
+
+      if (effectiveFileId) {
+        const response = await apiService.processNLQ(String(effectiveFileId), query);
+        if (response.success && response.data) {
+          const resData = response.data as any;
+          // Backend via process_nlq_view returns: { interpretation, visualization: { chartType, config } }
+          // But also handle direct { chartType, chartConfig, interpretation } format
+          resolvedChartType =
+            resData.visualization?.chartType ||
+            resData.chartType ||
+            chartType;
+          backendConfig =
+            resData.visualization?.config ||
+            resData.chartConfig ||
+            null;
+          if (resData.interpretation) {
+            interpretation = resData.interpretation;
+          }
+        } else {
+          throw new Error(response.error || 'Failed to process NLQ via AI');
+        }
+      } else {
+        toast.warning('No active dataset to query.');
+        setIsLoading(false);
+        return;
       }
+
       setChartType(resolvedChartType);
 
-      setLatestNlqResult({
-        query,
-        output: `Generated a ${resolvedChartType} visualization for: "${query}".`,
-      });
-      
-      // Switch to worksheet view to show the result
-      setActiveMode('worksheet');
-    }, 1500);
+      if (backendConfig) {
+        const resolveField = (name: string, asMeasure = false): any => {
+          const found = fields.find(f => f.name === name);
+          if (found) return found;
+          return { name, type: asMeasure ? 'measure' : 'dimension', dataType: 'string' };
+        };
+
+        const colNames = backendConfig.columns || [];
+        const rowNames = backendConfig.rows || [];
+        const getColumnName = (col: any) => typeof col === 'string' ? col : col?.name;
+
+        const columnsFields = colNames
+          .map((col: any) => getColumnName(col))
+          .filter(Boolean)
+          .map((name: string) => resolveField(name, false));
+
+        const rowsFields = rowNames
+          .map((row: any) => {
+            const name = getColumnName(row);
+            if (!name) return null;
+            let f = resolveField(name, true);
+            if (typeof row === 'object' && row.aggregation) {
+              f = { ...f, aggregation: row.aggregation } as any;
+            }
+            return f;
+          })
+          .filter(Boolean);
+
+        setChartConfig((prev: any) => ({
+          ...prev,
+          columns: columnsFields,
+          rows: rowsFields,
+        }));
+      }
+
+      // Store result & stay in NLQ mode so the user can READ the interpretation
+      setLatestNlqResult({ query, output: interpretation });
+      toast.success('Chart configured! Click "View Chart" to see it.');
+      // Do NOT switch to worksheet — let users read the interpretation first
+    } catch (e: any) {
+      toast.error('Failed to generate visualization: ' + e.message);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleFormatChange = (format: FormatConfig) => {
@@ -1043,6 +1092,7 @@ export function Visualization({ onNavigate, projectData, updateProjectData, mark
                   onQuerySubmit={handleNLQSubmit}
                   isProcessing={isLoading}
                   latestResult={latestNlqResult}
+                  onViewChart={() => setActiveMode('worksheet')}
                 />
               </div>
             )}
