@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Sparkles, Trash2, Droplets, Code, ArrowRight, Loader2, CheckCircle, Brain, BarChart3, Download } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -71,6 +71,10 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
   const [authFailed, setAuthFailed] = useState(false);
   const [featureProcessingId, setFeatureProcessingId] = useState<string | null>(null);
   const [appliedFeatures, setAppliedFeatures] = useState<Set<string>>(new Set());
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [suggestionsError, setSuggestionsError] = useState<string | null>(null);
 
   // 1. Resolve dataset ID: fetch from backend first (requires auth). On 401, show re-login message.
   useEffect(() => {
@@ -107,19 +111,64 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
     ensureDatasetId();
   }, [projectData.fileId, latestFromContext?.fileId]);
 
-  // Prefer the current upload flow's dataset first, backend lookup remains fallback.
-  const effectiveFileId = projectData.fileId ?? latestFromContext?.fileId ?? resolvedDatasetId;
+  /**
+   * Resolve which dataset ID to use for API calls.
+   * Root fix: `projectData.fileId` can be stale (e.g. old session) while `listDatasets` / upload
+   * context hold the real uploaded id. Naive `a ?? b ?? c` lets stale `projectData.fileId` win.
+   * Prefer current upload + backend-resolved id; keep `projectData.fileId` when it is the
+   * active processed dataset (not in upload list, and not an older id than the latest upload).
+   */
+  const effectiveFileId = useMemo(() => {
+    const completed = files.filter(
+      (f) => (f.status === 'completed' || f.status === 'success') && f.fileId != null && f.fileId !== ''
+    );
+    const uploadIdSet = new Set(
+      completed.map((f) => String(f.fileId)).filter((id) => id !== '')
+    );
+    const latest =
+      completed.length > 0
+        ? completed.reduce((a, b) => (Number(a.fileId) > Number(b.fileId) ? a : b))
+        : null;
+    const fromUploadFlow = latest?.fileId ?? resolvedDatasetId;
+    const projectId = projectData.fileId != null && projectData.fileId !== ''
+      ? String(projectData.fileId)
+      : null;
+
+    if (!projectId && !fromUploadFlow) return null;
+    if (!projectId) return String(fromUploadFlow);
+    if (!fromUploadFlow) {
+      return projectId;
+    }
+
+    if (uploadIdSet.has(projectId)) {
+      return String(fromUploadFlow ?? projectId);
+    }
+
+    const nProj = Number(projectId);
+    const nFrom = Number(fromUploadFlow);
+    const bothNumeric = !Number.isNaN(nProj) && !Number.isNaN(nFrom);
+    if (bothNumeric && nProj < nFrom) {
+      return String(fromUploadFlow);
+    }
+    return projectId;
+  }, [files, resolvedDatasetId, projectData.fileId]);
+
   const activeFile = effectiveFileId
     ? files.find(
       (f) => (f.status === 'completed' || f.status === 'success') && String(f.fileId) === String(effectiveFileId)
     ) ?? latestFromContext
     : latestFromContext ?? null;
 
+  const datasetDisplayName =
+    activeFile?.file?.name || activeFile?.name || projectData.fileName || 'dataset';
+
   // 2. Fetch uploaded dataset from backend — confirms retrieval and provides preview data.
   useEffect(() => {
     const fetchUploadedDataset = async () => {
       if (isLoading) return;
       if (!effectiveFileId) return;
+      setPreviewLoading(true);
+      setPreviewError(null);
       try {
         const res = await apiService.getDataPreview(String(effectiveFileId), 10);
         if (res.success && res.data) {
@@ -130,11 +179,16 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
           if (process.env.NODE_ENV === 'development') {
             console.log('[Preprocessing] Uploaded dataset received:', { fileId: effectiveFileId, rowCount: rows.length });
           }
+        } else {
+          setPreviewError(res.error || 'Could not load dataset preview.');
         }
       } catch (err) {
         if (process.env.NODE_ENV === 'development') {
           console.error('[Preprocessing] Dataset fetch error:', err);
         }
+        setPreviewError('Could not load dataset preview.');
+      } finally {
+        setPreviewLoading(false);
       }
     };
     fetchUploadedDataset();
@@ -148,6 +202,8 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
         setIsLoading(false);
         return;
       }
+      setSuggestionsLoading(true);
+      setSuggestionsError(null);
       try {
         let [prepResponse, feResponse] = await Promise.all([
           apiService.getPreprocessingSuggestions(String(effectiveFileId)),
@@ -197,8 +253,10 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
           setFeatureOptions(feOpts);
         }
       } catch (error) {
+        setSuggestionsError('Failed to load AI suggestions.');
         toast.error('Failed to load AI suggestions.');
       } finally {
+        setSuggestionsLoading(false);
         setIsLoading(false);
       }
     };
@@ -436,9 +494,10 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
   };
 
   const handleDownload = async () => {
-    if (!resolvedDatasetId) return;
+    const downloadId = effectiveFileId ?? resolvedDatasetId;
+    if (!downloadId) return;
     try {
-      const response = await apiService.downloadPreprocessedDataset(resolvedDatasetId);
+      const response = await apiService.downloadPreprocessedDataset(String(downloadId));
       if (response.success && response.data) {
         const url = window.URL.createObjectURL(new Blob([response.data]));
         const link = document.createElement('a');
@@ -501,14 +560,36 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
       <div className="mb-4">
         <h1 className="text-gray-900 mb-1">Data Preprocessing</h1>
         <p className="text-gray-600">Clean and prepare your data for analysis.</p>
+        {effectiveFileId && (
+          <p className="text-sm text-gray-500 mt-2">
+            Active dataset: <span className="font-medium text-gray-700">{datasetDisplayName}</span>
+            {' · '}
+            <span className="text-gray-500">ID {effectiveFileId}</span>
+            {previewLoading && (
+              <span className="inline-flex items-center gap-1 ml-2 text-blue-600">
+                <Loader2 className="w-3 h-3 animate-spin" aria-hidden />
+                Loading preview…
+              </span>
+            )}
+            {!previewLoading && uploadedDataset?.rowCount != null && (
+              <span className="ml-2 text-gray-500">· {uploadedDataset.rowCount} rows</span>
+            )}
+          </p>
+        )}
       </div>
+
+      {previewError && (
+        <Alert variant="destructive" className="mb-2">
+          <AlertDescription>{previewError}</AlertDescription>
+        </Alert>
+      )}
 
       <PreviewTable
         data={
           (uploadedDataset?.rows?.length ? uploadedDataset.rows : null) ??
           (Array.isArray(activeFile?.preview) ? activeFile.preview : (activeFile?.preview as any)?.rows ?? [])
         }
-        title={`Preview of ${activeFile?.name || activeFile?.file?.name || 'dataset'}`}
+        title={`Preview of ${datasetDisplayName}`}
       />
 
       <Card>
@@ -523,6 +604,22 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
+          {suggestionsLoading && (
+            <div className="flex items-center gap-2 text-sm text-gray-600 py-2">
+              <Loader2 className="w-4 h-4 animate-spin" aria-hidden />
+              Loading preprocessing suggestions…
+            </div>
+          )}
+          {suggestionsError && !suggestionsLoading && (
+            <Alert variant="destructive">
+              <AlertDescription>{suggestionsError}</AlertDescription>
+            </Alert>
+          )}
+          {!suggestionsLoading && preprocessingOptions.length === 0 && !suggestionsError && (
+            <p className="text-sm text-gray-600 py-2">
+              No AI cleaning steps were returned for this dataset. You can still run <strong>Apply Preprocessing</strong> for the full automated pipeline (missing values, duplicates, normalization, encoding).
+            </p>
+          )}
           {preprocessingOptions.map((option) => {
             const Icon = option.icon;
             const isSelected = selectedSteps.has(option.id);
@@ -557,19 +654,30 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
         </Alert>
       )}
 
-      {featureOptions.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Brain className="w-5 h-5 text-purple-500" aria-hidden />
-              Feature Engineering Suggestions
-              <Badge variant="outline" className="font-normal text-purple-700 border-purple-200 bg-purple-50">AI-suggested</Badge>
-            </CardTitle>
-            <CardDescription>
-              AI-recommended new engineered features that could improve the dataset.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Brain className="w-5 h-5 text-purple-500" aria-hidden />
+            Feature Engineering Suggestions
+            <Badge variant="outline" className="font-normal text-purple-700 border-purple-200 bg-purple-50">AI-suggested</Badge>
+          </CardTitle>
+          <CardDescription>
+            AI-recommended new engineered features that could improve the dataset. Apply these before or after cleaning steps as needed.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {suggestionsLoading && (
+            <div className="flex items-center gap-2 text-sm text-gray-600 py-4">
+              <Loader2 className="w-4 h-4 animate-spin" aria-hidden />
+              Loading feature engineering suggestions…
+            </div>
+          )}
+          {!suggestionsLoading && featureOptions.length === 0 && (
+            <p className="text-sm text-gray-600 py-4">
+              No feature engineering suggestions are available yet for this dataset. Try again after the preview loads, or proceed with preprocessing and refresh.
+            </p>
+          )}
+          {!suggestionsLoading && featureOptions.length > 0 && (
             <div className="rounded-lg border overflow-hidden">
               <Table>
                 <TableHeader className="bg-gray-50">
@@ -650,9 +758,9 @@ export function Preprocessing({ onNavigate, projectData, updateProjectData, mark
                 </TableBody>
               </Table>
             </div>
-          </CardContent>
-        </Card>
-      )}
+          )}
+        </CardContent>
+      </Card>
 
       <div className="flex flex-wrap justify-between gap-2 pt-2">
         <Button variant="outline" onClick={() => onNavigate('upload')}>Back to Upload</Button>
