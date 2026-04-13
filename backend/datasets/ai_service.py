@@ -14,19 +14,31 @@ def get_groq_client():
 def process_nlq(df, query):
     """
     Process a Natural Language Query against a DataFrame to return a visualization configuration.
+    Also handles general analytical queries by returning the answer in the interpretation field.
     """
     columns_info = {col: str(dtype) for col, dtype in df.dtypes.items()}
     sample_data = df.head(3).to_dict(orient='records')
     
+    numeric_stats = {}
+    for col in df.select_dtypes(include=['number']).columns[:15]:
+        numeric_stats[col] = {
+            "mean": round(float(df[col].mean()), 4),
+            "min": round(float(df[col].min()), 4),
+            "max": round(float(df[col].max()), 4),
+        }
+    
     prompt = f"""
-    You are a data visualization assistant.
+    You are an AI data visualization and analyst assistant.
     The user has a dataset with the following columns: {columns_info}
+    Dataset shape: {len(df)} rows x {len(df.columns)} columns
     A sample of the data: {sample_data}
+    Summary statistics for numeric columns: {numeric_stats}
     
     The user asked: "{query}"
     
-    Create a JSON response for a chart configuration. Determine the best chart_type ('bar', 'line', 'scatter', 'pie', 'histogram', 'boxplot').
-    Then define x and y data columns accordingly. For pie chart, x is the category and y is value.
+    1. If the user asks a general question (e.g. "what is the average?", "how many rows?", etc.), answer it explicitly in the "interpretation" field using the provided statistics or dataset context. You can use an empty chartConfig for this.
+    2. If the user asks for a chart or pattern (e.g. "show me sales by region"), determine the best chartType ('bar', 'line', 'scatter', 'pie', 'histogram', 'boxplot') and return the "chartConfig". Provide a helpful analysis in the "interpretation".
+    
     The JSON structure MUST look exactly like this:
     {{
         "chartType": "bar",
@@ -34,12 +46,13 @@ def process_nlq(df, query):
             "columns": [{{"name": "columnA", "type": "dimension"}}],
             "rows": [{{"name": "columnB", "type": "measure", "aggregation": "sum"}}]
         }},
-        "interpretation": "I grouped columnA to check total columnB over time."
+        "interpretation": "Your clear and comprehensive answer to the user's query here."
     }}
     
     IMPORTANT RULES:
     - Only use column names that exist in the dataset: {list(columns_info.keys())}
-    - The "interpretation" must be a clear, human-readable sentence explaining what the chart shows.
+    - The "interpretation" must contain the textual answer to the user's question.
+    - If the user asks a general data question, ensure the answer is proper and accurate based on numeric_stats.
     - For rows, if it is a numeric column, provide an aggregation (sum/mean/count).
     - Return ONLY valid JSON, no extra text.
     """
